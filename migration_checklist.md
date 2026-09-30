@@ -83,14 +83,14 @@ Execute phases sequentially. Each phase should leave the repo in a working, test
 - [x] Create `apps/api/app/shared/` package for versioned contract snapshots and `shared/prompts/` for externalized prompt files (no raw prompt strings in Python)
 - [x] Add unit tests validating model defaults (UUID generation, field constraints)
 
-### Phase 2: Database Layer
+### Phase 2: Database Layer ✅ Complete
 
-- [ ] Add `asyncpg` and `alembic` dependencies
-- [ ] Create `apps/api/app/db/` with unified engine/session configuration reading settings from `app/core/config`
-- [ ] Create `apps/api/app/core/` with environment configuration module
-- [ ] Initialize Alembic in `apps/api/alembic/` wired to the SQLModel metadata
-- [ ] Generate the initial migration (`alembic revision --autogenerate`) for Phase 1 models
-- [ ] Add a test/CI-friendly database strategy (e.g., env-driven DSN) so `pytest` passes without a live PostgreSQL where possible
+- [x] Add `asyncpg` and `alembic` dependencies (plus `pydantic-settings`, and `aiosqlite`/`pytest-asyncio` for test isolation)
+- [x] Create `apps/api/app/db/` with unified engine/session configuration reading settings from `app/core/config`
+- [x] Create `apps/api/app/core/` with environment configuration module
+- [x] Initialize Alembic in `apps/api/alembic/` wired to the SQLModel metadata
+- [x] Generate the initial migration (`alembic revision --autogenerate`) for Phase 1 models
+- [x] Add a test/CI-friendly database strategy (env-driven DSN with in-memory SQLite fallback in the `test` environment) so `pytest` passes without a live PostgreSQL
 
 ### Phase 3: FastAPI Refactor (Routes, Security, Middleware, Tasks)
 
