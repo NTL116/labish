@@ -1,0 +1,115 @@
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+@theme inline {
+  --color-swiss-ink: #0A120E;
+  --color-swiss-cream: #FAFAF6;
+  --color-swiss-slate: #76877E;
+  --font-sans: var(--font-inter), Arial, sans-serif;
+  --font-serif: var(--font-lora), Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+:root {
+  color-scheme: light;
+  background: #0A120E;
+}
+
+html,
+body {
+  min-height: 100%;
+  width: 100%;
+  margin: 0;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  background-color: #0A120E;
+  color: #0A120E;
+  font-family: var(--font-sans);
+}
+
+.stationery-sheet {
+  display: grid;
+  grid-template-columns: minmax(0, 72fr) minmax(0, 28fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  width: 100%;
+  max-width: 80rem;
+  min-height: 84vh;
+  overflow: hidden;
+  border: 1px solid rgba(118, 135, 126, 0.15);
+  border-radius: 6px;
+  background-color: #FAFAF6;
+  color: #0A120E;
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.4);
+}
+
+.canvas-left {
+  min-width: 0;
+  padding: 4rem;
+}
+
+.canvas-right-axis {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  border-left: 1px solid rgba(118, 135, 126, 0.12);
+  padding: 4rem 2.5rem;
+}
+
+.sheet-footer {
+  grid-column: 1 / -1;
+  border-top: 1px solid rgba(118, 135, 126, 0.12);
+  padding: 1rem 4rem;
+}
+
+h1,
+h2,
+h3,
+.font-serif-editorial {
+  font-family: var(--font-serif);
+  font-weight: 400;
+}
+
+@media (max-width: 64rem) {
+  body {
+    padding: 1.5rem;
+  }
+
+  .stationery-sheet {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 84vh;
+  }
+
+  .canvas-left {
+    padding: 2.5rem;
+  }
+
+  .canvas-right-axis {
+    border-top: 1px solid rgba(118, 135, 126, 0.12);
+    border-left: 0;
+    padding: 2.5rem;
+  }
+
+  .sheet-footer {
+    padding: 1rem 2.5rem;
+  }
+}
+
+@media (max-width: 40rem) {
+  body {
+    padding: 1rem;
+  }
+
+  .canvas-left,
+  .canvas-right-axis {
+    padding: 1.5rem;
+  }
+
+  .sheet-footer {
+    padding: 1rem 1.5rem;
+  }
+}

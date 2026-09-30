@@ -1,0 +1,1 @@
+"""Labish FastAPI service package."""
