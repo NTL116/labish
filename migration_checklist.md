@@ -92,17 +92,17 @@ Execute phases sequentially. Each phase should leave the repo in a working, test
 - [x] Generate the initial migration (`alembic revision --autogenerate`) for Phase 1 models
 - [x] Add a test/CI-friendly database strategy (env-driven DSN with in-memory SQLite fallback in the `test` environment) so `pytest` passes without a live PostgreSQL
 
-### Phase 3: FastAPI Refactor (Routes, Security, Middleware, Tasks)
+### Phase 3: FastAPI Refactor (Routes, Security, Middleware, Tasks) ✅ Complete
 
-- [ ] Slim down `app/main.py` to an entry point that only wires middleware and includes routers
-- [ ] Move `GET /health` into `apps/api/app/routes/` (e.g., `routes/system.py`) — routes perform no SQL or external calls directly
-- [ ] Keep the existing request-metadata middleware (`X-Request-ID`, `X-Response-Time-Ms`) and relocate it appropriately (e.g., `app/core/`)
-- [ ] Implement `app/core/security.py`: RS256 JWT sign/verify with PyJWT (private-key signing, public-key verification) and bcrypt password hashing via passlib — no `fastapi-users`
-- [ ] Add auth routes (login/token issuance) in `app/routes/` backed by the `User` model
-- [ ] Add `dramatiq[redis]` and `redis` dependencies; create `apps/api/app/tasks/` with a Redis broker setup and context-named task files; all actors use `@dramatiq.actor` and the `_task` suffix
-- [ ] Create `apps/api/app/integrations/` skeleton (`sap/`, `email/`, `storage/`) — pure, deterministic Python with typed inputs/outputs and `try/except` graceful-degradation wrappers around all network calls
-- [ ] Create `apps/api/app/ai/` skeleton (`agents/`, `workflows/`, `tools/`, `mcp/`); tools wrap `app/integrations/` clients only; add `langgraph` and `qdrant-client` dependencies when the first agent lands
-- [ ] Update/extend the pytest suite to cover routes, security, and middleware after the refactor
+- [x] Slim down `app/main.py` to an entry point that only wires middleware and includes routers
+- [x] Move `GET /health` into `apps/api/app/routes/` (`routes/system.py`) — routes perform no SQL or external calls directly
+- [x] Keep the existing request-metadata middleware (`X-Request-ID`, `X-Response-Time-Ms`) and relocate it appropriately (`app/core/middleware.py`)
+- [x] Implement `app/core/security.py`: RS256 JWT sign/verify with PyJWT (private-key signing, public-key verification) and bcrypt password hashing via passlib — no `fastapi-users`
+- [x] Add auth routes (login/token issuance) in `app/routes/` backed by the `User` model
+- [x] Add `dramatiq[redis]` and `redis` dependencies; create `apps/api/app/tasks/` with a Redis broker setup and context-named task files; all actors use `@dramatiq.actor` and the `_task` suffix
+- [x] Create `apps/api/app/integrations/` skeleton (`sap/`, `email/`, `storage/`) — pure, deterministic Python with typed inputs/outputs and `try/except` graceful-degradation wrappers around all network calls
+- [x] Create `apps/api/app/ai/` skeleton (`agents/`, `workflows/`, `tools/`, `mcp/`); tools wrap `app/integrations/` clients only; `langgraph` and `qdrant-client` deferred until the first agent lands
+- [x] Update/extend the pytest suite to cover routes, security, and middleware after the refactor
 
 ### Phase 4: Frontend Updates
 

@@ -1,7 +1,7 @@
-from time import perf_counter
-from uuid import uuid4
+from fastapi import FastAPI
 
-from fastapi import FastAPI, Request
+from app.core.middleware import register_middleware
+from app.routes import auth_router, system_router
 
 app = FastAPI(
     title="Labish Services",
@@ -9,20 +9,7 @@ app = FastAPI(
     description="Backend services for the Labish application.",
 )
 
+register_middleware(app)
 
-@app.middleware("http")
-async def add_request_metadata(request: Request, call_next):
-    request_id = uuid4().hex
-    started_at = perf_counter()
-    request.state.request_id = request_id
-
-    response = await call_next(request)
-    elapsed_ms = (perf_counter() - started_at) * 1000
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Response-Time-Ms"] = f"{elapsed_ms:.2f}"
-    return response
-
-
-@app.get("/health", tags=["system"])
-async def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+app.include_router(system_router)
+app.include_router(auth_router)

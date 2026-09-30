@@ -13,9 +13,15 @@ dependencies = [
   "sqlmodel>=0.0.24,<1",
   "pyjwt[crypto]>=2.14,<3",
   "passlib[bcrypt]>=1.7.4,<2",
+  # passlib 1.7.4 is incompatible with bcrypt >= 4.1 (backend self-test
+  # crashes); pin bcrypt to the last compatible release line.
+  "bcrypt>=4.0,<4.1",
   "asyncpg>=0.30,<1",
   "alembic>=1.14,<2",
   "pydantic-settings>=2.6,<3",
+  "dramatiq[redis]>=1.17,<2",
+  "redis>=5.2,<7",
+  "email-validator>=2.2,<3",
 ]
 
 [project.optional-dependencies]

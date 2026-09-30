@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     database_url: str = _DEFAULT_POSTGRES_URL
     database_echo: bool = False
 
+    redis_url: str = "redis://127.0.0.1:6379/0"
+
+    # RS256 key material. Provide either the PEM content directly or a
+    # path to a PEM file. When neither is set, an ephemeral RSA pair is
+    # generated at startup for local development.
+    jwt_private_key: str | None = None
+    jwt_public_key: str | None = None
+    jwt_private_key_path: str | None = None
+    jwt_public_key_path: str | None = None
+    jwt_issuer: str = "labish-services"
+    jwt_audience: str = "labish-web"
+    access_token_expire_minutes: int = 30
+
     @property
     def effective_database_url(self) -> str:
         """Database URL with graceful test isolation.
