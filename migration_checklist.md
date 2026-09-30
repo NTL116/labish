@@ -113,14 +113,14 @@ Execute phases sequentially. Each phase should leave the repo in a working, test
 - [x] Portal page now fetches backend health through the generated client (full dataset replacement of `src/data/*.ts` continues incrementally as backend routes land)
 - [x] Run `npm run lint` and `tsc --noEmit` to validate each change
 
-### Phase 5: Deployment Configuration
+### Phase 5: Deployment Configuration ✅ Complete
 
-- [ ] Create `deployment/nginx.conf` reverse-proxying `/` → Next.js (port 3000) and `/api/` → FastAPI (port 8000)
-- [ ] Create `deployment/systemd/fastapi.service` (Uvicorn, ordered after postgresql/redis/qdrant)
-- [ ] Create `deployment/systemd/worker.service` (Dramatiq worker cluster)
-- [ ] Create `deployment/systemd/qdrant.service` (local Qdrant daemon)
-- [ ] Create `deployment/systemd/nextjs.service` (Node production server)
-- [ ] Document host provisioning steps (apt packages, venv setup, Qdrant install) in the root `README.md`
+- [x] Create `deployment/nginx.conf` reverse-proxying `/` → Next.js (port 3000) and `/api/`, `/auth/`, `/health` → FastAPI (port 8000) with forwarding and request-ID headers
+- [x] Create `deployment/systemd/fastapi.service` (Uvicorn, ordered after postgresql/redis/qdrant, EnvironmentFile-driven)
+- [x] Create `deployment/systemd/worker.service` (Dramatiq worker cluster)
+- [x] Create `deployment/systemd/qdrant.service` (local Qdrant daemon)
+- [x] Create `deployment/systemd/nextjs.service` (Node production server)
+- [x] Document host provisioning steps (apt packages, venv setup, Qdrant install) in the root `README.md`
 
 ---
 
