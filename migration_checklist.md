@@ -67,13 +67,13 @@ Existing conforming assets to preserve: request-metadata middleware (`X-Request-
 
 Execute phases sequentially. Each phase should leave the repo in a working, testable state.
 
-### Phase 0: Workspace Restructure (Monorepo Layout)
+### Phase 0: Workspace Restructure (Monorepo Layout) ✅ Complete
 
-- [ ] Create the `apps/` directory at the repository root
-- [ ] Move `Services/` to `apps/api/` (preserve git history with `git mv`)
-- [ ] Move `front end/` to `apps/web/` (removes the problematic space in the path)
-- [ ] Update root `README.md` paths and commands to reference `apps/api` and `apps/web`
-- [ ] Verify backend tests (`pytest`) and frontend build (`npm run build`) still pass from the new locations
+- [x] Create the `apps/` directory at the repository root
+- [x] Move `Services/` to `apps/api/` (preserve git history with `git mv`)
+- [x] Move `front end/` to `apps/web/` (removes the problematic space in the path)
+- [x] Update root `README.md` paths and commands to reference `apps/api` and `apps/web`
+- [x] Verify backend tests (`pytest`) and frontend build (`npm run build`) still pass from the new locations
 
 ### Phase 1: Shared Contracts & Models
 

@@ -2,9 +2,9 @@
 
 # dependencies
 /node_modules
-/front end/node_modules
-Services/.venv/
-Services/**/__pycache__/
+/apps/web/node_modules
+apps/api/.venv/
+apps/api/**/__pycache__/
 /.pnp
 .pnp.*
 .yarn/*
@@ -15,16 +15,16 @@ Services/**/__pycache__/
 
 # testing
 /coverage
-Services/.pytest_cache/
+apps/api/.pytest_cache/
 
 # next.js
 /.next/
-/front end/.next/
-/front end/out/
+/apps/web/.next/
+/apps/web/out/
 /out/
 
 # production
-/front end/build/
+/apps/web/build/
 /build
 
 # misc

@@ -14,7 +14,7 @@ is unavailable, install the matching venv package first (for example,
 ## Local development
 
 ```bash
-cd Services
+cd apps/api
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
