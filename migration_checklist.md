@@ -75,13 +75,13 @@ Execute phases sequentially. Each phase should leave the repo in a working, test
 - [x] Update root `README.md` paths and commands to reference `apps/api` and `apps/web`
 - [x] Verify backend tests (`pytest`) and frontend build (`npm run build`) still pass from the new locations
 
-### Phase 1: Shared Contracts & Models
+### Phase 1: Shared Contracts & Models ✅ Complete
 
-- [ ] Add backend dependencies: `sqlmodel`, `pyjwt[crypto]`, `passlib[bcrypt]` (decide: keep `pyproject.toml` or adopt blueprint `requirements.txt`)
-- [ ] Create `apps/api/app/models/` package with singular-noun SQLModel classes, each `table=True` model carrying an indexed auto-generated UUID `id` primary key (start with `User`)
-- [ ] Create `apps/api/app/events/` package with past-tense event payload schemas (e.g., `OrderSubmittedEvent`) as plain SQLModel classes
-- [ ] Create `apps/api/app/shared/` package for versioned contract snapshots and `shared/prompts/` for externalized prompt files (no raw prompt strings in Python)
-- [ ] Add unit tests validating model defaults (UUID generation, field constraints)
+- [x] Add backend dependencies: `sqlmodel`, `pyjwt[crypto]`, `passlib[bcrypt]` (kept `pyproject.toml` as the dependency source)
+- [x] Create `apps/api/app/models/` package with singular-noun SQLModel classes, each `table=True` model carrying an indexed auto-generated UUID `id` primary key (start with `User`)
+- [x] Create `apps/api/app/events/` package with past-tense event payload schemas (e.g., `UserCreatedEvent`) as plain SQLModel classes
+- [x] Create `apps/api/app/shared/` package for versioned contract snapshots and `shared/prompts/` for externalized prompt files (no raw prompt strings in Python)
+- [x] Add unit tests validating model defaults (UUID generation, field constraints)
 
 ### Phase 2: Database Layer
 
