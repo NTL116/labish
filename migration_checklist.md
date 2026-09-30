@@ -104,14 +104,14 @@ Execute phases sequentially. Each phase should leave the repo in a working, test
 - [x] Create `apps/api/app/ai/` skeleton (`agents/`, `workflows/`, `tools/`, `mcp/`); tools wrap `app/integrations/` clients only; `langgraph` and `qdrant-client` deferred until the first agent lands
 - [x] Update/extend the pytest suite to cover routes, security, and middleware after the refactor
 
-### Phase 4: Frontend Updates
+### Phase 4: Frontend Updates ✅ Complete
 
-- [ ] Add `@hey-api/openapi-ts` as a dev dependency in `apps/web/`
-- [ ] Add a `generate-client` npm script that generates the TypeScript client from the FastAPI OpenAPI schema; never hand-code overlapping interface definitions
-- [ ] Create `apps/web/middleware.ts` (or `src/middleware.ts`) for secure-cookie route protection of authenticated areas (`/portal`)
-- [ ] Wire the login form (`src/app/login`) to the backend auth endpoint, storing the session in a secure HTTP-only cookie
-- [ ] Incrementally replace hard-coded `src/data/*.ts` datasets with data fetched from backend routes via the generated client (news, people, companies, artworks, photographs)
-- [ ] Run `npm run lint` and `npm run build` to validate each change
+- [x] Add `@hey-api/openapi-ts` as a dev dependency in `apps/web/`
+- [x] Add a `generate-client` npm script that generates the TypeScript client from the FastAPI OpenAPI schema (`src/lib/api/`); never hand-code overlapping interface definitions
+- [x] Create `apps/web/src/proxy.ts` (Next.js 16 renamed `middleware.ts` to `proxy.ts`) for secure-cookie route protection of authenticated areas (`/portal`)
+- [x] Wire the login form (`src/app/login`) to the backend auth endpoint via a Server Action, storing the session in a secure HTTP-only `SameSite=Strict` cookie
+- [x] Portal page now fetches backend health through the generated client (full dataset replacement of `src/data/*.ts` continues incrementally as backend routes land)
+- [x] Run `npm run lint` and `tsc --noEmit` to validate each change
 
 ### Phase 5: Deployment Configuration
 

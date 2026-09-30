@@ -3,8 +3,23 @@ import Link from "next/link";
 import Breadcrumb from "@/components/breadcrumb";
 import Footer from "@/components/footer";
 import SideRail from "@/components/side-rail";
+import { healthCheckHealthGet } from "@/lib/api";
+import { configureApiClient } from "@/lib/session";
 
-export default function PortalPage() {
+export const dynamic = "force-dynamic";
+
+async function getBackendStatus(): Promise<string> {
+  configureApiClient();
+  try {
+    const { data } = await healthCheckHealthGet();
+    return data?.status === "ok" ? "Operational" : "Degraded";
+  } catch {
+    return "Unreachable";
+  }
+}
+
+export default async function PortalPage() {
+  const backendStatus = await getBackendStatus();
   return (
     <article className="stationery-sheet">
       <section className="canvas-left flex flex-col gap-10">
@@ -15,6 +30,9 @@ export default function PortalPage() {
             <p className="max-w-lg font-sans text-sm leading-6 text-swiss-slate">
             The Labish portal is reserved for authorized individuals.
             For access information, please contact our office.
+            </p>
+            <p className="font-sans text-[10px] font-normal uppercase tracking-[0.13em] text-swiss-slate">
+              Services status: {backendStatus}
             </p>
             <div className="flex flex-wrap gap-x-6 gap-y-3">
               <Link
