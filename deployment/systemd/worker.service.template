@@ -5,11 +5,11 @@ Wants=redis-server.service
 
 [Service]
 Type=exec
-User=nathan
-Group=nathan
-WorkingDirectory=/home/nathan/my-application/apps/api
+User=${LABISH_USER}
+Group=${LABISH_GROUP}
+WorkingDirectory=${REPO_ROOT}/apps/api
 EnvironmentFile=/etc/labish/api.env
-ExecStart=/home/nathan/my-application/apps/api/venv/bin/dramatiq app.tasks.main
+ExecStart=${VENV_BIN}/dramatiq app.tasks.main
 Restart=always
 RestartSec=3
 

@@ -5,13 +5,13 @@ Wants=postgresql.service redis-server.service
 
 [Service]
 Type=exec
-User=nathan
-Group=nathan
-WorkingDirectory=/home/nathan/my-application/apps/api
+User=${LABISH_USER}
+Group=${LABISH_GROUP}
+WorkingDirectory=${REPO_ROOT}/apps/api
 # LABISH_* settings (database URL, JWT key paths, redis URL, ...) live in
 # the environment file, never in this unit.
 EnvironmentFile=/etc/labish/api.env
-ExecStart=/home/nathan/my-application/apps/api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=${VENV_BIN}/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
 

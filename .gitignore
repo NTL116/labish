@@ -4,7 +4,10 @@
 /node_modules
 /apps/web/node_modules
 apps/api/.venv/
+apps/api/venv/
 apps/api/**/__pycache__/
+# offline OpenAPI spec exported by apps/api/app/setup.py
+apps/web/openapi.json
 /.pnp
 .pnp.*
 .yarn/*
@@ -46,3 +49,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+apps/web/openapi-ts-error-*.log

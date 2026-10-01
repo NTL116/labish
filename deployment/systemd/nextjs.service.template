@@ -1,0 +1,26 @@
+[Unit]
+Description=Labish Next.js Web Frontend Server Node Process
+After=network.target fastapi.service
+Wants=fastapi.service
+
+[Service]
+Type=exec
+User=${LABISH_USER}
+Group=${LABISH_GROUP}
+WorkingDirectory=${REPO_ROOT}/apps/web
+# NEXT_PUBLIC_SITE_URL, DATABASE_URI, PAYLOAD_SECRET, PORT, ... live here.
+EnvironmentFile=/etc/labish/web.env
+# Pin the exact Node toolchain the installer provisioned so the unit can
+# never drift onto a different nodejs/npm stack.
+Environment=PATH=${NODE_BIN_DIR}:/usr/local/bin:/usr/bin:/bin
+ExecStart=${NPM_BIN} run start
+Restart=always
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
