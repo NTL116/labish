@@ -2,115 +2,91 @@
 
 **Desired outcome:** A user on a fresh Debian host installs Labish with a **single command** that pulls this repository from GitHub/Gitea (e.g. `curl -fsSL https://<host>/<owner>/labish/raw/main/install.sh | bash` or `bash <(wget -qO- ...)`) and ends up with a working stack — PostgreSQL, Redis, Qdrant, FastAPI, Dramatiq worker, Next.js, and nginx — ready to use.
 
-**Current state (per `runtime_logs.md`):** A manual install attempt stalled roughly halfway. The bootstrapper (`apps/api/app/setup.py`) got through system packages, the venv, backend pip install, and `npm install`, then **aborted at `npm run generate-client`** and never reached the database, SAP-ingestion, or systemd steps. No service was ever started; the application was never reachable.
+**Current state (per `install_logs`):** The one-liner now works nearly end-to-end. `install.sh` cloned the repo into `/opt/labish` and handed off to `apps/api/app/setup.py --yes`, which created the venv and re-executed itself inside it, installed Qdrant v1.13.4 (checksum-verified), installed backend dependencies, exported the OpenAPI schema offline and generated the frontend client from it, generated persistent RS256 JWT keys under `/etc/labish/keys`, provisioned the PostgreSQL role plus the `labish` and `labish_payload` databases, ran all three alembic migrations, built the Next.js production bundle, populated `/etc/labish/{api,web,qdrant}.env`, rendered and started the four systemd units, and passed the backend/frontend health checks. The run was resumable, non-interactive, and ended with a step-by-step summary.
+
+**One step failed:** `systemctl enable --now nginx` exited 1 after `nginx -t` passed, so the public HTTP gateway never came up — the stack is reachable only on `127.0.0.1:8000` / `127.0.0.1:3000`. A handful of smaller defects also surfaced in the log (see below).
+
+All seven items in the previous delta table (OpenAPI chicken-and-egg, DB provisioning, frontend build, Qdrant install, template rendering, env/JWT scaffolding, entry point/resumability) are now **closed**. What remains is the nginx failure plus polish items observed in this run.
 
 ---
 
-## 1. Observed failure (the proximate blocker)
+## 1. Observed failure: nginx did not start (the remaining blocker)
 
-- `npm run generate-client` (`@hey-api/openapi-ts`) fetches the OpenAPI spec from `http://127.0.0.1:8000/openapi.json` (`apps/web/openapi-ts.config.ts`). On a fresh install **the backend is not running yet**, so the fetch fails ("Request failed with status 500: fetch failed") — a chicken-and-egg dependency baked into the install order.
-- `setup.py` offers an `OPENAPI_INPUT` override but there is **no checked-in OpenAPI spec file** in the repo to point it at, and the installer neither starts a temporary backend nor exports the schema offline.
-- Because `run()` raises `BootstrapError` and `main()` aborts on the first error, this single failure **killed the whole bootstrap** — steps 4–6 (alembic migrations, SAP ingestion, systemd linking, `/etc/labish/*.env` scaffolding) were never executed.
-- Minor UX issue: openapi-ts's interactive "Open a GitHub issue?" crash prompt blocked an otherwise scriptable flow.
+- `setup.py` rendered and installed the site, disabled the stock default site, and `nginx -t` reported the configuration as valid — yet `systemctl enable --now nginx` failed with exit code 1 (`install_logs` lines 383–388). The installer printed only "see systemctl status / journalctl" and moved on; **no diagnostics were captured**, so the root cause (port 80 conflict, stale pidfile/socket, masked unit, partially-running nginx from the apt install, etc.) is unknown.
+- `check_nginx` (`apps/api/app/setup.py` ~line 1065) runs `enable --now` followed by `reload`; if nginx is already running in a wedged state from package install, `start` can fail where `restart` would succeed. There is no retry or `systemctl restart nginx` fallback.
+- The post-install health check (`check_health`, setup.py ~line 1078) only probes `http://127.0.0.1:8000/health` and `http://127.0.0.1:3000/` — **it never checks the nginx gateway on port 80**, so the log claims "All health checks passed; the stack is up" while the user-facing entry point is down.
 
-## 2. Database provisioning gap
+## 2. Status-reporting defects in the summary
 
-- Nothing in `setup.py`, the README, or deployment docs **creates the PostgreSQL role or the `labish` database**. The default DSN (`postgresql+asyncpg://127.0.0.1:5432/labish`, `apps/api/app/core/config.py`) carries no credentials, and Debian's PostgreSQL defaults to peer auth — `alembic upgrade head` would have failed even if the bootstrap had reached it.
-- The Payload CMS side of `apps/web` needs its **own** `DATABASE_URI` and `PAYLOAD_SECRET` (`src/payload.config.ts`, defaulting to empty strings) — these are documented nowhere in the install flow.
+- **SAP ingestion reported `[OK]` despite failing.** The step printed `Ingestion failed: No validated SAP configuration is saved` and a warning, yet the bootstrap summary recorded `[OK ] SAP ingestion` (log lines 357–358 vs 403). A step that warns-and-continues should be recorded as `SKIP`/`WARN` with its reason, not `OK` — otherwise re-run triage is misleading.
+- The final message "All health checks passed; the stack is up" printed even though nginx had already failed in the same run; the health step and the closing summary should be consistent about overall stack state.
 
-## 3. Frontend production gap
+## 3. Node toolchain drift (warning-level, will become a failure)
 
-- `setup.py` runs `npm install` + `generate-client` but **never runs `npm run build`**, while `deployment/systemd/nextjs.service` runs `npm run start`, which fails without a prior production build.
-- `next build` fetches Google Fonts at build time, so it **fails on offline/restricted hosts** — no vendored fonts or fallback.
-- Node toolchain is unpinned: apt pulled Debian's nodejs/npm 9.2 plus hundreds of `node-*` debs, while the operator's shell actually resolved **nvm Node v26**. `package.json` has no `engines` field; `setup.py` uses whatever `npm` is first on `PATH`. Result: two divergent Node stacks and no guarantee the systemd unit (`/usr/bin/npm`) uses the same one.
+- The installer accepted Debian's Node **v20.19.2 / npm 9.2** because `NODE_MAJOR_MIN = 20` (setup.py line 102), but `npm install` emitted five `EBADENGINE` warnings: `@hey-api/openapi-ts@0.99.0` and its deps now require **node >= 22.18**, and `commander@15` requires >= 22.12 (log lines 255–279). The build happened to succeed, but the pinned NodeSource major is already 22 (`NODE_MAJOR_PINNED = 22`) and `AGENTS.md` §3 documents NodeSource 22.x — the minimum-accepted version has drifted below what the dependency tree actually supports.
 
-## 4. Qdrant gap
+## 4. Secret hygiene in installer output
 
-- `deployment/systemd/qdrant.service` expects `/usr/local/bin/qdrant`, but **no automated install exists**: `setup.py` doesn't check for Qdrant, the README says to download the release binary manually, and the `AGENTS.md` snippet is broken (`curl -L https://github.com | tar -xz`). The runtime log shows Qdrant was **never installed**.
-- The backend as installed (see pip list in the log) contains **no `qdrant-client` or `langgraph`**, contradicting the dependency list in `AGENTS.md` §3 — docs and `apps/api/pyproject.toml` have drifted.
+- `run()` echoes every command before executing it, so the generated PostgreSQL password was printed in cleartext: `CREATE ROLE labish LOGIN PASSWORD 'doiCE4...'` (log line 237). Anyone capturing the install log (CI, terminal scrollback, support tickets — including this very file) now holds a live DB credential. The echo must redact secret-bearing arguments, and the exposed password on this host should be rotated.
 
-## 5. Deployment artifacts don't match the real host
+## 5. Minor defects and warnings observed in the log
 
-- Systemd units hardcode `User=nathan`, `Group=nathan`, and `WorkingDirectory=/home/nathan/my-application/...`; the actual host user was `nathanlabish` and the repo lived at `~/Documents/labish-main`. `setup.py` symlinks the units **verbatim with no templating/substitution**, so even a successful bootstrap would produce units that fail on start.
-- `deployment/nginx.conf` hardcodes `server_name my-application.local`; no step installs/enables it (README gives manual commands only, and `setup.py` doesn't touch nginx despite probing for it).
-- `/etc/labish/*.env` files are scaffolded as **empty comment-only placeholders** with no documented list of required keys (`LABISH_DATABASE_URL`, `LABISH_JWT_*` key paths, `LABISH_REDIS_URL`, `NEXT_PUBLIC_SITE_URL`, `PORT`, `PAYLOAD_SECRET`, `DATABASE_URI`). No step generates **persistent RS256 JWT keys** — production would silently run on an ephemeral dev keypair regenerated at each restart, invalidating sessions.
+- **tarfile DeprecationWarning** during the Qdrant extract (log lines 32–33): `tar.extract(member, path=tmp)` needs `filter="data"` before Python 3.14 changes the default.
+- **Deprecated/EOL npm packages**: `eslint@9.39.5` is flagged as no longer supported, and `@esbuild-kit/*` has merged into `tsx` (log lines 280–282) — dependency refresh needed in `apps/web/package.json`.
+- Health coverage is thin even where it exists: Qdrant (`:6333`) and the Dramatiq worker are started but never health-checked; only FastAPI and Next.js are probed.
+- `chown -R` over the whole repo and `/var/lib/qdrant` runs unconditionally on every bootstrap (log lines 361–363) — harmless but slow on re-runs; could be made conditional.
 
-## 6. Process/usability gaps evident in the log
-
-- The operator had to guess invocation (`python3 app/setup.py` from the wrong directory failed; path confusion cost several attempts). There is no top-level `install.sh` / `make install` entry point, and the README's "Host provisioning" section diverges from `setup.py` (e.g. `pip install -e .` vs `.[dev]`; README omits the bootstrapper entirely).
-- The venv requirement is enforced by a hard abort rather than the script creating/activating the venv itself.
-- `apt` emitted `pg_lsclusters: not found` during PostgreSQL configuration — transient Debian packaging ordering, likely benign, but the installer should verify the cluster actually initialized.
-- `npm install` surfaced 18 vulnerabilities (5 high) and unapproved install scripts — not blocking, but part of a "ready to ship" delta.
-
-## 7. Delta summary
+## 6. Delta summary
 
 | # | Desired | Current | Severity |
 |---|---------|---------|----------|
-| 1 | Client generation works on fresh install | Requires a live backend; no spec fallback; aborts whole bootstrap | **Blocker** (observed failure) |
-| 2 | DB role/db created + migrated automatically | No role/db creation; credential-less DSN; migrations never ran | **Blocker** |
-| 3 | Frontend built and startable via systemd | No `npm run build` step; Google Fonts breaks offline builds; Node unpinned | **Blocker** |
-| 4 | Qdrant installed and running | No install automation; broken docs; service points at missing binary | High |
-| 5 | Systemd/nginx configs valid for the target host | Hardcoded `nathan` / `/home/nathan/my-application` / `my-application.local` | High |
-| 6 | Populated env files + persistent JWT keys | Empty placeholders, undocumented keys, ephemeral keys only | High |
-| 7 | Single, resumable, documented install entry point | Multi-step, interactive, fail-fast script; README/AGENTS/pyproject drift | Medium |
+| 1 | nginx gateway up on port 80 after install | `systemctl enable --now nginx` fails; no diagnostics captured; no restart fallback | **Blocker** (observed failure) |
+| 2 | Health check proves the user-facing stack works | Only probes :8000/:3000 directly; declares "stack is up" with nginx down; Qdrant/worker unchecked | High |
+| 3 | Summary statuses match what actually happened | Failed SAP ingestion recorded as `[OK]` | Medium |
+| 4 | Node toolchain satisfies the dependency tree | Node 20 accepted; @hey-api packages require >= 22.18 (EBADENGINE) | Medium |
+| 5 | No secrets in installer output | Generated DB password echoed in cleartext | Medium (security) |
+| 6 | Clean, warning-free install | tarfile deprecation; EOL eslint/@esbuild-kit deps; unconditional chown -R | Low |
 
-**Bottom line:** the delta is not one bug but an install pipeline that assumes an already-running, already-configured system. The blockers (OpenAPI generation ordering, database provisioning, frontend production build) plus host-specific hardcoding in `deployment/` must be closed before a single-command install from a GitHub/Gitea repo is achievable.
+**Bottom line:** the single-command install pipeline now exists and works — one failed step (nginx) stands between the current state and the stated goal, plus a short list of correctness and hygiene fixes surfaced by this first real end-to-end run.
 
 ---
 
-## 8. Development checklist for a single-command install
+## 7. Development checklist (updated from the `install_logs` run)
 
-Target invocation (one line, fresh Debian host):
+### A. Fix the nginx provisioning step (Blocker)
 
-```bash
-curl -fsSL https://<git-host>/<owner>/labish/raw/main/install.sh | sudo bash
-```
+- [ ] Reproduce and diagnose the `systemctl enable --now nginx` failure on a fresh Debian host; on failure, have `check_nginx` automatically capture and print `systemctl status nginx`, `journalctl -xeu nginx -n 50`, and `ss -ltnp 'sport = :80'` so the summary is actionable without a second SSH session.
+- [ ] Make nginx startup robust: fall back to `systemctl restart nginx` when `enable --now` fails (handles a wedged daemon left by the apt install), and verify the unit is `active` afterwards instead of assuming success.
+- [ ] Detect and report port-80 conflicts (another server, a lingering default-site worker) before attempting the start.
+- [ ] Re-run the one-liner on the affected host after the fix and confirm the summary reports `[OK ] nginx`.
 
-### A. Entry point & orchestration
+### B. Harden the post-install health check
 
-- [ ] Add a top-level `install.sh` that: verifies Debian + root/sudo, installs `git` + `curl` if missing, clones (or updates) the repository from the GitHub/Gitea remote into a well-known location (e.g. `/opt/labish`), then hands off to the bootstrapper non-interactively.
-- [ ] Make `apps/api/app/setup.py` fully non-interactive under a single flag (`--yes` already exists; ensure *every* step honours it, including the openapi-ts crash prompt via `CI=1`/`--no-interactive` equivalents).
-- [ ] Make the bootstrapper **resumable and non-fail-fast**: collect step failures, continue independent steps, and print a final actionable summary instead of aborting on the first `BootstrapError`.
-- [ ] Have the bootstrapper create and use the `apps/api/venv` itself when absent, instead of aborting with "no virtual environment is active".
-- [ ] Add an idempotency guarantee: re-running the one-liner on a provisioned host must be a safe no-op/upgrade.
-- [ ] Per the AGENTS.md installer-sync rule, keep `install.sh` a thin wrapper — all provisioning logic stays in `apps/api/app/setup.py`.
+- [ ] Add a gateway probe through nginx (`http://127.0.0.1:80/` and `/api/health` or equivalent) so the health step validates the path users actually hit, not just the upstreams.
+- [ ] Add a Qdrant liveness probe (`http://127.0.0.1:6333/healthz` or `/readyz`) and a worker check (`systemctl is-active worker` at minimum).
+- [ ] Only print "the stack is up" when **every** started service — including nginx — passed; otherwise state exactly which entry points are degraded.
 
-### B. Break the OpenAPI chicken-and-egg (Blocker 1)
+### C. Fix summary status reporting
 
-- [ ] Add an offline schema export step: generate `openapi.json` from the FastAPI app in-process (no server needed) and feed it to `generate-client` via `OPENAPI_INPUT` — or commit a generated `openapi.json` artifact kept in sync by CI.
-- [ ] Update `setup.py` `check_frontend()` to use the offline spec by default during provisioning and fall back to the live URL only in dev workflows.
+- [ ] Change `check_sap_ingestion` (and any other warn-and-continue step) to record a `SKIP`/`WARN` outcome with its reason instead of `OK` when the step did not actually complete, so the `--- Bootstrap summary ---` is trustworthy for re-run triage.
+- [ ] Ensure the process exit code and final message reflect the true aggregate state (it already returns 1 on failure — keep the human-readable output consistent with that).
 
-### C. Database provisioning (Blocker 2)
+### D. Align the Node toolchain with the dependency tree
 
-- [ ] Add a `setup.py` step that creates the PostgreSQL role and `labish` database (via `sudo -u postgres psql`), generates a strong password, and writes the resulting `LABISH_DATABASE_URL` into `/etc/labish/api.env`.
-- [ ] Verify the PostgreSQL cluster is initialized and running (`pg_lsclusters` / `systemctl status postgresql`) before running migrations.
-- [ ] Run `alembic upgrade head` non-interactively using the provisioned DSN.
-- [ ] Provision the Payload CMS database/role and write `DATABASE_URI` + a generated `PAYLOAD_SECRET` into `/etc/labish/web.env`.
+- [ ] Raise `NODE_MAJOR_MIN` in `setup.py` to match what `apps/web`'s dependency tree requires (>= 22.18 per the `EBADENGINE` warnings), so the installer upgrades Debian's Node 20 to the pinned NodeSource 22.x instead of accepting it.
+- [ ] Update the `engines` field in `apps/web/package.json` to the same floor, and keep `setup.py`/`AGENTS.md` in sync per the installer-sync rule.
 
-### D. Frontend production readiness (Blocker 3)
+### E. Secret hygiene
 
-- [ ] Add `npm run build` to the bootstrapper after client generation, with `NEXT_PUBLIC_SITE_URL` sourced from install configuration.
-- [ ] Vendor fonts locally (self-host via `next/font/local`) so `next build` succeeds without internet access to Google Fonts.
-- [ ] Pin the Node.js toolchain: add an `engines` field to `apps/web/package.json`, install a pinned Node version (NodeSource or `nvm` in a deterministic path) from the installer, and point the `nextjs.service` unit at that exact binary.
+- [ ] Redact secret-bearing arguments in `run()`'s command echo (mask the psql `PASSWORD '...'` literal and any future secret parameters) so generated credentials never land in install logs.
+- [ ] Rotate the PostgreSQL `labish` role password exposed in this captured log, and scrub/avoid committing logs containing live credentials.
 
-### E. Qdrant automation
+### F. Cleanup items
 
-- [ ] Add a Qdrant install step to `setup.py`: download a pinned release binary (with checksum verification) to `/usr/local/bin/qdrant`, or document/automate the apt/docker alternative.
-- [ ] Fix the broken Qdrant install snippet in `AGENTS.md` and align the backend dependency list (`qdrant-client`, `langgraph`) between `AGENTS.md` and `apps/api/pyproject.toml` — either add the packages or correct the docs.
+- [ ] Pass `filter="data"` to the Qdrant `tar.extract(...)` call in `setup.py` to silence the Python 3.14 tarfile deprecation and harden the extraction.
+- [ ] Refresh `apps/web` dev dependencies: move off EOL `eslint@9.39.x` and the deprecated `@esbuild-kit/*` packages (superseded by `tsx`).
+- [ ] Make the `chown -R` of `/opt/labish` and `/var/lib/qdrant` conditional (skip when ownership is already correct) to keep re-runs fast.
 
-### F. Templated deployment artifacts
+### G. Regression protection
 
-- [ ] Convert `deployment/systemd/*.service` and `deployment/nginx.conf` into templates; have `setup.py` render them with the actual install user, repository path, venv path, node path, and server name, then install the rendered copies (not verbatim symlinks).
-- [ ] Add an nginx provisioning step: install the rendered site config into `sites-available`, symlink into `sites-enabled`, run `nginx -t`, and reload.
-- [ ] Enable and start all services (`qdrant`, `fastapi`, `worker`, `nextjs`, `nginx`) at the end of the bootstrap, then run a health check against `/health` and the site root.
-
-### G. Secrets & environment files
-
-- [ ] Generate a persistent RS256 keypair at install time (e.g. `/etc/labish/keys/`, mode 0600), and write `LABISH_JWT_PRIVATE_KEY_PATH`/`LABISH_JWT_PUBLIC_KEY_PATH` into `api.env` so sessions survive restarts.
-- [ ] Populate `/etc/labish/{api,web,qdrant}.env` with every required key (documented defaults + generated secrets) instead of empty comment-only placeholders; document the full key list in the README.
-
-### H. Documentation & verification
-
-- [ ] Rewrite the README install section around the one-liner, replacing the divergent manual steps; keep a documented "manual path" that matches what `setup.py` actually does.
-- [ ] Add a CI job that exercises the full install on a clean Debian container/VM (headless, `--yes`) and asserts all services come up healthy — preventing regressions in installability.
-- [ ] Triage the 18 `npm audit` findings and the unapproved install scripts so a fresh install is not born with known high-severity vulnerabilities.
+- [ ] Extend (or add) the clean-Debian CI install job to assert the nginx gateway answers on port 80 and that the bootstrap summary contains no `FAIL` lines, so this failure class is caught before release.
