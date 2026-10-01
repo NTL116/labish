@@ -39,7 +39,8 @@ hands off to the provisioning engine `apps/api/app/setup.py --yes`, which:
 
 1. Installs missing system packages via apt (PostgreSQL, Redis, nginx, openssl).
 2. Installs a pinned Node.js toolchain (NodeSource 22.x) when the host node is
-   missing or older than Node 20.
+   missing or older than Node 22.18 (the floor required by the `apps/web`
+   dependency tree).
 3. Downloads the pinned Qdrant release (checksum-verified) to
    `/usr/local/bin/qdrant`.
 4. Creates `apps/api/venv` and installs backend dependencies.
@@ -50,8 +51,12 @@ hands off to the provisioning engine `apps/api/app/setup.py --yes`, which:
    databases with a generated password and runs `alembic upgrade head`.
 8. Populates `/etc/labish/{api,web,qdrant}.env` with every required key.
 9. Renders the `deployment/` systemd and nginx templates with the real
-   user/paths/server name, installs them, enables and starts all services,
-   and health-checks `/health` and the site root.
+   user/paths/server name, installs them, enables and starts all services
+   (nginx falls back to a restart if a plain start fails, port-80 conflicts
+   are reported up front, and `systemctl status`/`journalctl`/`ss` output is
+   captured automatically on failure), then health-checks the nginx gateway
+   (`/` and `/api/health` on port 80), FastAPI, Next.js, Qdrant (`/readyz`)
+   and the Dramatiq worker.
 
 The bootstrapper is **resumable and idempotent**: a failing step is recorded
 and the remaining steps still run, a final summary lists anything that needs
@@ -59,7 +64,12 @@ attention, and re-running the one-liner on a provisioned host is a safe
 no-op/upgrade. Useful knobs (env vars for `install.sh`, flags for
 `setup.py`): `LABISH_SERVER_NAME`/`--server-name`, `LABISH_SITE_URL`/
 `--site-url`, `LABISH_SERVICE_USER`/`--service-user`, and `--skip-*` flags
-for each step.
+for each step. The summary marks each step `OK`, `WARN` (ran but did not
+complete, e.g. SAP ingestion without a saved SAP configuration), `SKIP`, or
+`FAIL`; the exit code is non-zero only when a step failed. Secrets
+(database passwords) are redacted from the installer's command echo; run
+`setup.py --yes --rotate-db-password` to issue a new PostgreSQL credential
+and rewrite the DSNs in `/etc/labish/{api,web}.env` if one was ever exposed.
 
 ### Environment files
 

@@ -13,7 +13,7 @@ attention):
  1. System packages  -- verify core Debian host runtimes (python3,
                         PostgreSQL, Redis, nginx, openssl) and install any
                         missing ones via apt.
- 2. Node toolchain   -- ensure Node.js >= NODE_MAJOR_MIN (installing the
+ 2. Node toolchain   -- ensure Node.js >= NODE_VERSION_MIN (installing the
                         pinned NodeSource major when absent/too old) so the
                         frontend and the systemd unit share one runtime.
  3. Qdrant           -- download the pinned Qdrant release binary with
@@ -32,7 +32,12 @@ attention):
 10. SAP ingestion    -- optional data-dictionary regeneration (never fatal).
 11. Systemd + nginx  -- render deployment/ templates with the real user,
                         paths and server name, install them, enable and
-                        start all services, then health-check the stack.
+                        start all services, then health-check the stack
+                        end to end (nginx gateway, FastAPI, Next.js,
+                        Qdrant, Dramatiq worker).
+
+The summary records each step as OK, WARN (ran but did not complete),
+SKIP or FAIL; the exit code is non-zero only when a step FAILed.
 
 Usage::
 
@@ -42,6 +47,7 @@ Usage::
                                   [--skip-systemd] [--skip-nginx]
                                   [--server-name NAME] [--site-url URL]
                                   [--service-user USER]
+                                  [--rotate-db-password]
 
 Re-running on a provisioned host is a safe no-op/upgrade: every step is
 idempotent (existing env values, keys, databases and units are preserved).
@@ -89,6 +95,8 @@ QDRANT_DATA_DIR = Path("/var/lib/qdrant")
 NGINX_SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 NGINX_SITES_ENABLED = Path("/etc/nginx/sites-enabled")
 NGINX_SITE_NAME = "labish"
+HTTP_PORT = 80
+GATEWAY_URL = f"http://127.0.0.1:{HTTP_PORT}/"
 
 # Environment files referenced by the systemd units (EnvironmentFile=...).
 ENV_FILES = ("api.env", "web.env", "qdrant.env")
@@ -97,9 +105,10 @@ ENV_FILES = ("api.env", "web.env", "qdrant.env")
 SERVICE_UNITS = ("qdrant", "fastapi", "worker", "nextjs")
 
 # Pinned Node.js major installed from NodeSource when the host runtime is
-# missing or older than NODE_MAJOR_MIN. Keep in sync with the "engines"
-# field in apps/web/package.json.
-NODE_MAJOR_MIN = 20
+# missing or older than NODE_VERSION_MIN. Keep in sync with the "engines"
+# field in apps/web/package.json (the apps/web dependency tree, e.g.
+# @hey-api/openapi-ts, requires node >= 22.18).
+NODE_VERSION_MIN = (22, 18)
 NODE_MAJOR_PINNED = 22
 
 # Pinned Qdrant release installed to /usr/local/bin/qdrant, with SHA-256
@@ -151,6 +160,10 @@ class StepSkipped(RuntimeError):
     """Raised when a step cannot run in this environment (not a failure)."""
 
 
+class StepWarning(RuntimeError):
+    """Raised when a non-fatal step ran but did not complete its work."""
+
+
 def info(message: str) -> None:
     print(f"[setup] {message}", flush=True)
 
@@ -176,6 +189,20 @@ def confirm(question: str, *, assume_yes: bool) -> bool:
         print("Please answer 'y' or 'n'.")
 
 
+# Secret-bearing fragments masked before a command is echoed or embedded in
+# an error message, so generated credentials never land in install logs.
+_SECRET_PATTERNS = (
+    re.compile(r"(PASSWORD\s+)'(?:[^']|'')*'", re.IGNORECASE),
+    re.compile(r"(://[^:/@\s]+:)[^@\s]+(@)"),
+)
+
+
+def redact(text: str) -> str:
+    """Mask secrets (SQL PASSWORD literals, DSN passwords) in ``text``."""
+    text = _SECRET_PATTERNS[0].sub(r"\1'********'", text)
+    return _SECRET_PATTERNS[1].sub(r"\1********\2", text)
+
+
 def run(
     command: list[str],
     *,
@@ -184,7 +211,8 @@ def run(
     capture: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess, surfacing a readable error on failure."""
-    info(f"$ {' '.join(command)}  (cwd={cwd})")
+    printable = redact(" ".join(command))
+    info(f"$ {printable}  (cwd={cwd})")
     result = subprocess.run(
         command,
         cwd=cwd,
@@ -195,10 +223,10 @@ def run(
     if result.returncode != 0:
         detail = ""
         if capture and result.stderr:
-            detail = f"\n{result.stderr.strip()}"
+            detail = f"\n{redact(result.stderr.strip())}"
         raise BootstrapError(
             f"Command failed with exit code {result.returncode}: "
-            f"{' '.join(command)}{detail}"
+            f"{printable}{detail}"
         )
     return result
 
@@ -236,6 +264,9 @@ class Context:
     payload_database_url: str = ""
     npm_path: str = ""
     node_path: str = ""
+    rotate_db_password: bool = False
+    check_gateway: bool = True
+    db_password_rotated: bool = False
     results: list[tuple[str, str, str]] = field(default_factory=list)
 
     def record(self, step: str, status: str, detail: str = "") -> None:
@@ -329,27 +360,42 @@ def check_system_packages(ctx: Context) -> None:
 # 2. Node toolchain (pinned)
 # ---------------------------------------------------------------------------
 
-def _node_major(node: str) -> int | None:
+def _parse_node_version(output: str) -> tuple[int, int, int] | None:
+    match = re.match(r"v?(\d+)\.(\d+)\.(\d+)", output.strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def _node_version(node: str) -> tuple[int, int, int] | None:
     try:
         out = subprocess.run(
             [node, "--version"], capture_output=True, text=True, check=True
-        ).stdout.strip()
+        ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
-    match = re.match(r"v(\d+)", out)
-    return int(match.group(1)) if match else None
+    return _parse_node_version(out)
+
+
+def _node_version_ok(version: tuple[int, int, int] | None) -> bool:
+    return version is not None and version[:2] >= NODE_VERSION_MIN
+
+
+def _format_version(version: tuple[int, ...]) -> str:
+    return ".".join(str(part) for part in version)
 
 
 def check_node_toolchain(ctx: Context) -> None:
     info("--- Node toolchain check ---")
     node = shutil.which("node")
-    major = _node_major(node) if node else None
-    if node and major is not None and major >= NODE_MAJOR_MIN:
-        info(f"Found Node.js v{major} at {node}")
+    version = _node_version(node) if node else None
+    minimum = _format_version(NODE_VERSION_MIN)
+    if node and _node_version_ok(version):
+        info(f"Found Node.js v{_format_version(version)} at {node}")
     else:
-        found = f"v{major}" if major is not None else "none"
+        found = f"v{_format_version(version)}" if version else "none"
         warn(
-            f"Node.js >= {NODE_MAJOR_MIN} required (found: {found}); "
+            f"Node.js >= {minimum} required (found: {found}); "
             f"installing Node {NODE_MAJOR_PINNED}.x from NodeSource."
         )
         if not confirm(
@@ -378,10 +424,12 @@ def check_node_toolchain(ctx: Context) -> None:
         )
         _apt_install(["nodejs"])
         node = shutil.which("node")
-        major = _node_major(node) if node else None
-        if node is None or major is None or major < NODE_MAJOR_MIN:
-            raise BootstrapError("Node.js install did not yield a usable node.")
-        info(f"Installed Node.js v{major} at {node}")
+        version = _node_version(node) if node else None
+        if node is None or not _node_version_ok(version):
+            raise BootstrapError(
+                f"Node.js install did not yield node >= {minimum}."
+            )
+        info(f"Installed Node.js v{_format_version(version)} at {node}")
 
     npm = shutil.which("npm")
     if npm is None:
@@ -439,7 +487,10 @@ def check_qdrant(ctx: Context) -> None:
         info("Checksum verified.")
         with tarfile.open(archive) as tar:
             member = tar.getmember("qdrant")
-            tar.extract(member, path=tmp)
+            if hasattr(tarfile, "data_filter"):
+                tar.extract(member, path=tmp, filter="data")
+            else:  # Python without the PEP 706 extraction filters.
+                tar.extract(member, path=tmp)
         extracted = Path(tmp) / "qdrant"
         extracted.chmod(0o755)
         run(
@@ -736,11 +787,14 @@ def check_database(ctx: Context) -> None:
     match = re.match(
         rf"postgresql\+asyncpg://{DB_ROLE}:([^@]+)@", existing_dsn
     )
-    if match:
+    if match and not ctx.rotate_db_password:
         password = match.group(1)
         info("Reusing database credentials from /etc/labish/api.env.")
         role_sql = None
     else:
+        if match:
+            info(f"Rotating the PostgreSQL '{DB_ROLE}' role password "
+                 "(--rotate-db-password).")
         password = _generate_password()
         role_sql = password
 
@@ -759,9 +813,11 @@ def check_database(ctx: Context) -> None:
         )
         info(f"Created PostgreSQL role '{DB_ROLE}'.")
     elif role_sql is not None:
-        # Role exists but no recorded credential: rotate to a known one.
+        # Role exists but no recorded credential (or rotation requested):
+        # rotate to a known one.
         _run_psql(f"ALTER ROLE {DB_ROLE} LOGIN PASSWORD '{password}'")
         info(f"Reset password for existing PostgreSQL role '{DB_ROLE}'.")
+    ctx.db_password_rotated = role_sql is not None and bool(match)
 
     for db_name in (DB_NAME, PAYLOAD_DB_NAME):
         db_exists = _run_psql(
@@ -777,8 +833,13 @@ def check_database(ctx: Context) -> None:
     ctx.api_database_url = (
         f"postgresql+asyncpg://{DB_ROLE}:{password}@127.0.0.1:5432/{DB_NAME}"
     )
-    ctx.payload_database_url = web_env.get("DATABASE_URI") or (
+    payload_dsn = (
         f"postgresql://{DB_ROLE}:{password}@127.0.0.1:5432/{PAYLOAD_DB_NAME}"
+    )
+    ctx.payload_database_url = (
+        payload_dsn
+        if ctx.db_password_rotated
+        else web_env.get("DATABASE_URI") or payload_dsn
     )
 
     env = os.environ.copy()
@@ -802,20 +863,33 @@ ENV_FILE_HEADER = """\
 """
 
 
-def _merge_env_file(name: str, defaults: dict[str, str]) -> None:
-    """Write defaults for missing keys only, preserving operator edits."""
+def _merge_env_file(
+    name: str,
+    defaults: dict[str, str],
+    overrides: dict[str, str] | None = None,
+) -> None:
+    """Write defaults for missing keys only, preserving operator edits.
+
+    ``overrides`` are always written (e.g. a freshly rotated credential).
+    """
     path = ENV_FILE_DIR / name
     existing = _read_env_file(path)
-    merged = {**defaults, **existing}
+    merged = {**defaults, **existing, **(overrides or {})}
     lines = [ENV_FILE_HEADER.format(name=name)]
     for key, value in merged.items():
         lines.append(f"{key}={value}")
     path.write_text("\n".join(lines) + "\n")
     os.chmod(path, 0o640)
     added = [key for key in defaults if key not in existing]
+    changed = [
+        key for key, value in (overrides or {}).items()
+        if existing.get(key) != value
+    ]
+    if changed:
+        info(f"Updated {path} (rewrote: {', '.join(changed)}).")
     if added:
         info(f"Populated {path} (added: {', '.join(added)}).")
-    else:
+    elif not changed:
         info(f"Environment file up to date: {path}")
 
 
@@ -841,6 +915,11 @@ def check_env_files(ctx: Context) -> None:
             "LABISH_JWT_PRIVATE_KEY_PATH": str(JWT_PRIVATE_KEY_PATH),
             "LABISH_JWT_PUBLIC_KEY_PATH": str(JWT_PUBLIC_KEY_PATH),
         },
+        overrides=(
+            {"LABISH_DATABASE_URL": ctx.api_database_url}
+            if ctx.db_password_rotated
+            else None
+        ),
     )
     _merge_env_file(
         "web.env",
@@ -852,6 +931,11 @@ def check_env_files(ctx: Context) -> None:
             or f"postgresql://127.0.0.1:5432/{PAYLOAD_DB_NAME}",
             "PAYLOAD_SECRET": payload_secret,
         },
+        overrides=(
+            {"DATABASE_URI": ctx.payload_database_url}
+            if ctx.db_password_rotated
+            else None
+        ),
     )
     _merge_env_file(
         "qdrant.env",
@@ -881,12 +965,11 @@ def check_sap_ingestion(ctx: Context) -> None:
         "regeneration via app/shared/ingest_sap_metadata.py)?",
         assume_yes=ctx.assume_yes,
     ):
-        info(
-            "Skipping SAP metadata ingestion. Run it later via "
+        raise StepSkipped(
+            "SAP metadata ingestion declined. Run it later via "
             "POST /settings/sap/ingest or "
             "'python -m app.shared.ingest_sap_metadata'."
         )
-        return
     env = os.environ.copy()
     if ctx.api_database_url:
         env.setdefault("LABISH_DATABASE_URL", ctx.api_database_url)
@@ -897,13 +980,13 @@ def check_sap_ingestion(ctx: Context) -> None:
     )
     if result.returncode != 0:
         # Fresh installs typically have no validated SAP gateway yet;
-        # ingestion is re-runnable, so never fail the bootstrap on it.
-        warn(
-            "SAP metadata ingestion did not complete (no validated SAP "
-            "configuration, or the Service Layer is unreachable). "
-            "Re-run it from the admin setup page once SAP is connected."
+        # ingestion is re-runnable, so never fail the bootstrap on it --
+        # but never report it as OK either.
+        raise StepWarning(
+            "ingestion did not complete (no validated SAP configuration, "
+            "or the Service Layer is unreachable); re-run it from the "
+            "admin setup page once SAP is connected"
         )
-        return
     info("SAP data dictionary and TypeScript definitions regenerated.")
 
 
@@ -938,6 +1021,33 @@ def _resolve_service_user(ctx: Context) -> str:
         else:
             return "root"
     return "labish"
+
+
+def _needs_chown(path: Path, user: str) -> bool:
+    """True when anything under ``path`` is not owned by ``user:user``.
+
+    Stops at the first mismatch, so re-runs on an already-owned tree are
+    cheap compared to an unconditional ``chown -R``.
+    """
+    find = shutil.which("find")
+    if find is None:
+        return True
+    result = subprocess.run(
+        [
+            find, str(path), "(", "!", "-user", user, "-o", "!", "-group",
+            user, ")", "-print", "-quit",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode != 0 or bool(result.stdout.strip())
+
+
+def _ensure_owner(path: Path, user: str) -> None:
+    if _needs_chown(path, user):
+        run(["chown", "-R", f"{user}:{user}", str(path)], cwd=REPO_ROOT)
+    else:
+        info(f"Ownership already correct ({user}): {path}")
 
 
 def _render_template(source: Path, substitutions: dict[str, str]) -> str:
@@ -991,14 +1101,8 @@ def check_systemd(ctx: Context) -> None:
     # Qdrant persists under /var/lib/qdrant.
     QDRANT_DATA_DIR.mkdir(parents=True, exist_ok=True)
     if service_user != "root":
-        run(
-            ["chown", "-R", f"{service_user}:{service_user}", str(REPO_ROOT)],
-            cwd=REPO_ROOT,
-        )
-        run(
-            ["chown", "-R", f"{service_user}:{service_user}", str(QDRANT_DATA_DIR)],
-            cwd=REPO_ROOT,
-        )
+        _ensure_owner(REPO_ROOT, service_user)
+        _ensure_owner(QDRANT_DATA_DIR, service_user)
         if ENV_FILE_DIR.is_dir():
             run(
                 ["chgrp", "-R", service_user, str(ENV_FILE_DIR)],
@@ -1019,14 +1123,35 @@ def check_systemd(ctx: Context) -> None:
         info(f"Installed rendered unit: {target}")
 
     run(["systemctl", "daemon-reload"], cwd=REPO_ROOT)
+    failed_units: list[str] = []
     for unit in SERVICE_UNITS:
         result = subprocess.run(
             ["systemctl", "enable", "--now", f"{unit}.service"], cwd=REPO_ROOT
         )
         if result.returncode != 0:
             warn(f"Failed to enable/start {unit}.service; check journalctl.")
+            failed_units.append(unit)
         else:
             info(f"Enabled and started {unit}.service.")
+    if ctx.db_password_rotated:
+        # Already-running services still hold the old DSN.
+        restart = [
+            unit for unit in ("fastapi", "worker", "nextjs")
+            if unit not in failed_units
+        ]
+        if restart:
+            if _systemctl_ok("restart", *restart):
+                info("Restarted services to pick up the rotated DB password.")
+            else:
+                failed_units.extend(restart)
+    if failed_units:
+        raise BootstrapError(
+            "Failed to enable/start: "
+            + ", ".join(f"{unit}.service" for unit in failed_units)
+            + ". Inspect 'journalctl -u "
+            + " -u ".join(failed_units)
+            + "' for details."
+        )
 
 
 def check_nginx(ctx: Context) -> None:
@@ -1042,7 +1167,7 @@ def check_nginx(ctx: Context) -> None:
         raise BootstrapError(f"Missing nginx template: {template}")
     if not confirm(
         f"Install the rendered nginx site (server_name {ctx.server_name}) "
-        "and reload nginx?",
+        "and start/reload nginx?",
         assume_yes=ctx.assume_yes,
     ):
         info("Skipping nginx provisioning.")
@@ -1061,45 +1186,225 @@ def check_nginx(ctx: Context) -> None:
 
     nginx = shutil.which("nginx") or "/usr/sbin/nginx"
     run([nginx, "-t"], cwd=REPO_ROOT)
+
+    conflicts = _foreign_port_listeners(HTTP_PORT)
+    if conflicts:
+        raise BootstrapError(
+            f"Port {HTTP_PORT} is already held by another process, so nginx "
+            "cannot bind it. Stop/disable that service and re-run:\n"
+            + "\n".join(conflicts)
+        )
+
     if systemctl_available():
-        run(["systemctl", "enable", "--now", "nginx"], cwd=REPO_ROOT)
-        run(["systemctl", "reload", "nginx"], cwd=REPO_ROOT)
-    elif shutil.which("service"):
-        subprocess.run(["service", "nginx", "reload"], cwd=REPO_ROOT)
-    info(f"nginx site '{NGINX_SITE_NAME}' installed and reloaded.")
+        _start_nginx_systemd()
+    else:
+        _start_nginx_direct(nginx)
+
+    if _http_status(GATEWAY_URL, host=_gateway_host(ctx)) is None:
+        _nginx_diagnostics()
+        raise BootstrapError(
+            f"nginx reports running but {GATEWAY_URL} does not answer; see "
+            "the diagnostics above."
+        )
+    info(f"nginx site '{NGINX_SITE_NAME}' installed; gateway answering on "
+         f"port {HTTP_PORT}.")
+
+
+def _port_listeners(port: int) -> list[str]:
+    """Return ``ss`` lines for TCP listeners on ``port`` (empty if unknown)."""
+    ss = shutil.which("ss")
+    if ss is None:
+        return []
+    result = subprocess.run(
+        [ss, "-H", "-ltnp", f"sport = :{port}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _foreign_port_listeners(port: int) -> list[str]:
+    """Listeners on ``port`` that belong to something other than nginx."""
+    return [
+        line for line in _port_listeners(port)
+        if 'users:' in line and '"nginx"' not in line
+    ]
+
+
+def _capture(command: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"(could not run {' '.join(command)}: {exc})"
+    return (result.stdout + result.stderr).strip()
+
+
+def _nginx_diagnostics() -> None:
+    """Print the evidence needed to triage an nginx start failure."""
+    commands: list[list[str]] = []
+    if shutil.which("systemctl"):
+        commands.append(["systemctl", "status", "nginx", "--no-pager", "-l"])
+    if shutil.which("journalctl"):
+        commands.append(
+            ["journalctl", "-xeu", "nginx", "-n", "50", "--no-pager"]
+        )
+    if shutil.which("ss"):
+        commands.append(["ss", "-ltnp", f"sport = :{HTTP_PORT}"])
+    for command in commands:
+        warn(f"--- diagnostics: {' '.join(command)} ---")
+        print(redact(_capture(command)), file=sys.stderr, flush=True)
+
+
+def _systemctl_ok(*args: str) -> bool:
+    return (
+        subprocess.run(["systemctl", *args], cwd=REPO_ROOT).returncode == 0
+    )
+
+
+def _nginx_active() -> bool:
+    return subprocess.run(
+        ["systemctl", "is-active", "--quiet", "nginx"], cwd=REPO_ROOT
+    ).returncode == 0
+
+
+def _start_nginx_systemd() -> None:
+    """Enable and (re)start nginx, recovering from a wedged apt-time daemon."""
+    state = _capture(["systemctl", "is-enabled", "nginx"])
+    if state.startswith("masked"):
+        warn("nginx.service is masked; unmasking it.")
+        run(["systemctl", "unmask", "nginx"], cwd=REPO_ROOT)
+    if not _systemctl_ok("enable", "nginx"):
+        warn("'systemctl enable nginx' failed; continuing to start it.")
+
+    if _nginx_active():
+        if _systemctl_ok("reload", "nginx"):
+            info("Reloaded the running nginx.")
+        else:
+            warn("nginx reload failed; falling back to a restart.")
+            _systemctl_ok("restart", "nginx")
+    elif not _systemctl_ok("start", "nginx"):
+        warn(
+            "'systemctl start nginx' failed; clearing the failed state and "
+            "falling back to 'systemctl restart nginx'."
+        )
+        _systemctl_ok("reset-failed", "nginx")
+        _systemctl_ok("restart", "nginx")
+
+    for _ in range(5):
+        if _nginx_active():
+            info("nginx.service is active.")
+            return
+        time.sleep(1)
+    _nginx_diagnostics()
+    raise BootstrapError(
+        "nginx.service is not active after start/restart; see the "
+        "diagnostics above (systemctl status, journalctl, port listeners)."
+    )
+
+
+def _nginx_pid_alive(pidfile: Path = Path("/run/nginx.pid")) -> bool:
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _start_nginx_direct(nginx: str) -> None:
+    """Start/reload nginx on hosts without systemd (e.g. containers)."""
+    if _nginx_pid_alive() or any(
+        '"nginx"' in line for line in _port_listeners(HTTP_PORT)
+    ):
+        result = subprocess.run([nginx, "-s", "reload"], cwd=REPO_ROOT)
+        if result.returncode == 0:
+            info("Reloaded the running nginx.")
+            return
+        warn("nginx reload failed; attempting a fresh start.")
+    if shutil.which("service"):
+        subprocess.run(["service", "nginx", "start"], cwd=REPO_ROOT)
+    if _http_status(GATEWAY_URL) is None:
+        subprocess.run([nginx], cwd=REPO_ROOT)
+
+
+def _http_status(
+    url: str, *, host: str | None = None, timeout: float = 5
+) -> int | None:
+    """HTTP status for ``url`` (including 4xx/5xx), or None if unreachable.
+
+    ``host`` overrides the Host header so the rendered nginx server block
+    (not a stock default site) answers gateway probes.
+    """
+    request = urllib.request.Request(url)
+    if host:
+        request.add_header("Host", host)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def _unit_active(unit: str) -> bool:
+    return subprocess.run(
+        ["systemctl", "is-active", "--quiet", f"{unit}.service"],
+        cwd=REPO_ROOT,
+    ).returncode == 0
+
+
+def _gateway_host(ctx: Context) -> str | None:
+    return None if ctx.server_name == "_" else ctx.server_name
 
 
 def check_health(ctx: Context) -> None:
-    """Verify the provisioned stack actually answers."""
+    """Verify the provisioned stack actually answers, end to end."""
     info("--- Post-install health check ---")
     if not systemctl_available():
         raise StepSkipped("No systemd-managed services to health-check.")
-    checks = {
+    http_checks = {
         "backend /health": "http://127.0.0.1:8000/health",
         "frontend root": "http://127.0.0.1:3000/",
+        "qdrant /readyz": "http://127.0.0.1:6333/readyz",
     }
-    failures: list[str] = []
-    for label, url in checks.items():
-        ok = False
-        for _ in range(15):
-            try:
-                with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310
-                    if response.status < 500:
-                        ok = True
-                        break
-            except (urllib.error.URLError, OSError):
-                pass
+    if ctx.check_gateway:
+        # The path users actually hit: nginx -> Next.js / FastAPI.
+        http_checks["gateway root"] = GATEWAY_URL
+        http_checks["gateway /api/health"] = f"{GATEWAY_URL}api/health"
+
+    pending = dict(http_checks)
+    for attempt in range(15):
+        for label, url in list(pending.items()):
+            host = _gateway_host(ctx) if url.startswith(GATEWAY_URL) else None
+            status = _http_status(url, host=host)
+            if status is not None and status < 500:
+                info(f"Healthy: {label} ({url})")
+                del pending[label]
+        if not pending:
+            break
+        if attempt < 14:
             time.sleep(2)
-        if ok:
-            info(f"Healthy: {label} ({url})")
-        else:
-            failures.append(f"{label} ({url})")
+    failures = [f"{label} ({url})" for label, url in pending.items()]
+
+    if _unit_active("worker"):
+        info("Healthy: worker.service is active")
+    else:
+        failures.append("worker.service (not active)")
+
     if failures:
         raise BootstrapError(
             "Health check failed for: " + "; ".join(failures)
-            + ". Inspect 'journalctl -u fastapi -u nextjs' for details."
+            + ". Inspect 'journalctl -u nginx -u fastapi -u nextjs -u qdrant "
+            "-u worker' for details."
         )
-    info("All health checks passed; the stack is up.")
+    info("All health checks passed: " + ", ".join(
+        [*http_checks, "worker.service"]
+    ) + ".")
 
 
 # ---------------------------------------------------------------------------
@@ -1147,6 +1452,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip nginx site provisioning.",
     )
     parser.add_argument(
+        "--rotate-db-password", action="store_true",
+        help="Generate a new password for the PostgreSQL 'labish' role and "
+        "rewrite the DSNs in /etc/labish/{api,web}.env (restart the "
+        "services afterwards).",
+    )
+    parser.add_argument(
         "--server-name",
         default=os.environ.get("LABISH_SERVER_NAME", "_"),
         help="nginx server_name for the rendered site (default: '_').",
@@ -1175,6 +1486,9 @@ def _execute(ctx: Context, name: str, func, *, skip: bool = False) -> None:
     except StepSkipped as exc:
         warn(f"{name}: {exc}")
         ctx.record(name, "skipped", str(exc))
+    except StepWarning as exc:
+        warn(f"{name}: {exc}")
+        ctx.record(name, "warning", str(exc))
     except BootstrapError as exc:
         warn(f"{name} failed: {exc}")
         ctx.record(name, "failed", str(exc))
@@ -1191,6 +1505,8 @@ def main(argv: list[str] | None = None) -> int:
         assume_yes=args.yes,
         service_user=args.service_user,
         server_name=args.server_name,
+        rotate_db_password=args.rotate_db_password,
+        check_gateway=not args.skip_nginx,
         site_url=args.site_url
         or (f"http://{args.server_name}" if args.server_name != "_" else ""),
     )
@@ -1231,21 +1547,48 @@ def main(argv: list[str] | None = None) -> int:
         warn("Interrupted by operator.")
         return 130
 
+    return report_summary(ctx)
+
+
+SUMMARY_MARKERS = {
+    "ok": "OK  ",
+    "warning": "WARN",
+    "skipped": "SKIP",
+    "failed": "FAIL",
+}
+
+
+def report_summary(ctx: Context) -> int:
+    """Print the per-step summary; the exit code mirrors the aggregate state."""
     info("--- Bootstrap summary ---")
-    failed = False
+    failed: list[str] = []
     for name, status, detail in ctx.results:
-        marker = {"ok": "OK ", "skipped": "SKIP", "failed": "FAIL"}[status]
-        suffix = f" -- {detail}" if detail else ""
-        info(f"[{marker}] {name}{suffix}")
+        suffix = f" -- {redact(detail)}" if detail else ""
+        info(f"[{SUMMARY_MARKERS[status]}] {name}{suffix}")
         if status == "failed":
-            failed = True
+            failed.append(name)
     if failed:
         warn(
-            "One or more steps failed. Fix the issues above and re-run the "
-            "bootstrapper; completed steps are idempotent and will no-op."
+            "Step(s) failed: " + ", ".join(failed) + ". The stack is NOT "
+            "fully up. Fix the issues above and re-run the bootstrapper; "
+            "completed steps are idempotent and will no-op."
         )
         return 1
-    info("Bootstrap complete.")
+    health = [status for name, status, _ in ctx.results if name == "Health check"]
+    if health == ["ok"]:
+        info("Bootstrap complete; every service passed its health check and "
+             "the stack is up.")
+    else:
+        info("Bootstrap complete. The running stack was not health-checked "
+             "end to end (see SKIP entries above).")
+    systemd_ok = any(
+        name == "Systemd services" and status == "ok"
+        for name, status, _ in ctx.results
+    )
+    if ctx.db_password_rotated and not systemd_ok:
+        warn("The database password was rotated; restart the services "
+             "('systemctl restart fastapi worker nextjs') if they were "
+             "already running.")
     return 0
 
 

@@ -2,9 +2,10 @@ name: Install smoke test
 
 # Exercises the full single-command install path on a clean Debian
 # container (headless, --yes) and asserts the stack is actually usable,
-# preventing regressions in installability. systemd/nginx service
-# management is unavailable inside the container, so those steps are
-# skipped and the backend is health-checked directly.
+# preventing regressions in installability. systemd service management
+# is unavailable inside the container, so the unit step is skipped; nginx
+# is still provisioned (started without systemd) and the backend is
+# health-checked both directly and through the port-80 gateway.
 
 on:
   push:
@@ -39,7 +40,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run the installer (non-interactive)
-        run: bash install.sh --skip-systemd --skip-nginx --skip-sap-ingest
+        shell: bash
+        run: |
+          set -o pipefail
+          bash install.sh --skip-systemd --skip-sap-ingest 2>&1 | tee /tmp/install.log
+
+      - name: Assert the bootstrap summary has no FAIL lines
+        run: |
+          set -eux
+          grep -q -- '--- Bootstrap summary ---' /tmp/install.log
+          if grep -F '[FAIL]' /tmp/install.log; then exit 1; fi
+          grep -F '[OK  ] nginx' /tmp/install.log
 
       - name: Assert provisioning artifacts
         run: |
@@ -68,14 +79,25 @@ jobs:
           apt-get install -y -qq curl
           export $(grep -v '^#' /etc/labish/api.env | xargs)
           venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          healthy=0
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:8000/health | grep -q '"ok"'; then
-              exit 0
+              healthy=1
+              break
             fi
             sleep 1
           done
-          echo "Backend never became healthy" >&2
-          exit 1
+          if [ "$healthy" != 1 ]; then
+            echo "Backend never became healthy" >&2
+            exit 1
+          fi
+          # The user-facing path: nginx gateway on port 80.
+          curl -fsS http://127.0.0.1:80/health | grep -q '"ok"'
+          curl -fsS http://127.0.0.1:80/api/health | grep -q '"ok"'
 
       - name: Re-run installer (idempotency)
-        run: bash install.sh --skip-systemd --skip-nginx --skip-sap-ingest
+        shell: bash
+        run: |
+          set -o pipefail
+          bash install.sh --skip-systemd --skip-sap-ingest 2>&1 | tee /tmp/install-rerun.log
+          if grep -F '[FAIL]' /tmp/install-rerun.log; then exit 1; fi
