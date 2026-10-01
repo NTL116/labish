@@ -119,6 +119,30 @@ class SAPServiceLayerClient:
             logger.warning("SAP Service Layer GET %s failed: %s", path, exc)
             return None
 
+    # -- schema metadata -------------------------------------------------
+
+    async def get_metadata_xml(self) -> str | None:
+        """Pull the complete raw OData ``$metadata`` XML schema document.
+
+        Returns the raw XML string from the native ``/$metadata``
+        endpoint (relative to the configured Service Layer base URL,
+        e.g. ``https://host:50000/b1s/v2/$metadata``), or ``None`` when
+        the endpoint is unreachable.
+        """
+        try:
+            async with self._client() as client:
+                response = await client.get("/$metadata")
+            if response.status_code == 200:
+                return response.text
+            logger.warning(
+                "SAP Service Layer GET /$metadata returned HTTP %s",
+                response.status_code,
+            )
+            return None
+        except Exception as exc:  # graceful degradation — never crash callers
+            logger.warning("SAP Service Layer GET /$metadata failed: %s", exc)
+            return None
+
     # -- identity federation lookups -----------------------------------
 
     async def find_employee_by_email(self, email: str) -> dict | None:

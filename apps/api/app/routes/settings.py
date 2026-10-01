@@ -4,17 +4,54 @@ Routes validate HTTP payloads and delegate: live connectivity checks go
 through the SAP integration client, persistence is a simple CRUD write.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import InvalidTokenError
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from app.core.security import decrypt_secret, encrypt_secret
+from app.core.security import (
+    decode_access_token,
+    decrypt_secret,
+    encrypt_secret,
+)
 from app.db.session import get_async_session
 from app.integrations.sap.service_layer import SAPServiceLayerClient
 from app.models import SAPConfig
+from app.shared.ingest_sap_metadata import ingest_sap_metadata
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_admin(
+    credentials: HTTPAuthorizationCredentials | None = Security(
+        _bearer_scheme
+    ),
+) -> dict:
+    """Guard management endpoints: a valid admin bearer token is required."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        payload = decode_access_token(credentials.credentials)
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if payload.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator privileges are required",
+        )
+    return payload
 
 
 class SAPConnectionRequest(BaseModel):
@@ -42,6 +79,17 @@ class SAPStatusResponse(BaseModel):
     is_validated: bool
     is_connected: bool
     fallback_phone_number: str | None = None
+
+
+class SAPIngestResponse(BaseModel):
+    """Summary of a completed metadata ingestion pass."""
+
+    success: bool
+    entities: int
+    complex_types: int
+    dictionary_files: int
+    typescript_file: str | None
+    detail: str
 
 
 async def _run_test_login(payload: SAPConnectionRequest) -> tuple[bool, str]:
@@ -145,4 +193,52 @@ async def sap_status(
         is_validated=config.is_validated,
         is_connected=is_connected,
         fallback_phone_number=config.fallback_phone_number,
+    )
+
+
+@router.post("/sap/ingest", response_model=SAPIngestResponse)
+async def ingest_sap_schema(
+    session: AsyncSession = Depends(get_async_session),
+    _admin: dict = Depends(require_admin),
+) -> SAPIngestResponse:
+    """Run the SAP metadata ingestion engine instantly (admin only).
+
+    Pulls the raw OData ``$metadata`` document, regenerates the JSON
+    data dictionary under ``app/shared/sap_dictionary/`` and recompiles
+    the frontend ``apps/web/src/types/sap.d.ts`` definitions.
+    """
+    result = await session.execute(
+        select(SAPConfig).where(SAPConfig.is_validated == True)  # noqa: E712
+    )
+    config = result.scalars().first()
+    if config is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No validated SAP configuration is saved",
+        )
+
+    client = SAPServiceLayerClient(
+        config.service_layer_url,
+        config.company_db,
+        config.username,
+        decrypt_secret(config.password),
+    )
+    ingest = await ingest_sap_metadata(client)
+    if not ingest.success:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=ingest.error or "SAP metadata ingestion failed",
+        )
+
+    return SAPIngestResponse(
+        success=True,
+        entities=ingest.entities,
+        complex_types=ingest.complex_types,
+        dictionary_files=len(ingest.dictionary_files),
+        typescript_file=ingest.typescript_file,
+        detail=(
+            f"Ingested {ingest.entities} entities and "
+            f"{ingest.complex_types} complex types; data dictionary and "
+            "TypeScript definitions refreshed"
+        ),
     )
