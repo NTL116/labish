@@ -272,6 +272,13 @@ When updating schemas or modifying API layers, the AI must follow this defensive
 *   Never bake raw prompt strings directly into python execution files.
 *   All complex agent system instructions, structural system roles, and template context formats must reside in `app/shared/prompts/` as plain text or YAML targets. This ensures prompts can be version-controlled, tested, and fine-tuned independently of the backend logic.
 
+## 6. STRICT ENGINEERING RULE: INSTALLER SYNC & COMPLIANCE BOUNDARY
+- The single source of truth for host system configuration, provisioning steps, and installation logic is `apps/api/app/setup.py`.
+- **Absolute Rule:** Any time you add a core system dependency to `pyproject.toml`, adjust a database migration tracking model, modify systemd environment paths, or add a frontend client requirement, **you must immediately edit `apps/api/app/setup.py` in the same commit** to ensure the automated installation script handles that new adjustment cleanly.
+- You are strictly prohibited from finalizing a phase or update without executing a check that the bootstrap wizard handles the newly written components out of the box.
+
+
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
