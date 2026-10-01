@@ -221,6 +221,11 @@ When updating schemas or modifying API layers, the AI must follow this defensive
 *   Never bake raw prompt strings directly into python execution files.
 *   All complex agent system instructions, structural system roles, and template context formats must reside in `app/shared/prompts/` as plain text or YAML targets. This ensures prompts can be version-controlled, tested, and fine-tuned independently of the backend logic.
 
+### ⚠️ STRICT ENGINEERING RULE: INSTALLER SYNC & COMPLIANCE BOUNDARY
+*   **Source of Truth:** `apps/api/app/setup.py` is the code-managed, absolute master source of truth for machine provisioning — covering both core host utilities (apt-managed system runtimes such as python3, nodejs/npm, postgresql, redis-server, and nginx) and python packages. All dependency validation, environment parsing, and host orchestration (apt system package installs, pip/npm installs, OpenAPI client generation, alembic migrations, systemd unit linking, and `/etc/labish/*.env` handling) must flow through this bootstrapper — never through ad-hoc shell snippets or undocumented manual steps.
+*   **Mandatory Sync:** Any future modification to package metadata (`apps/api/pyproject.toml`, `apps/web/package.json`), environment keys (`apps/api/app/core/config.py`), or orchestration files (`deployment/*`) **must** include an evaluation of `apps/api/app/setup.py` and a matching update within the same development cycle. A change is not complete until the bootstrapper reflects it.
+*   **Drift Prevention:** If a reviewed change touches any of the files above without touching `setup.py`, the author must explicitly state in the change description why no bootstrapper update was required. Silent divergence between the provisioning engine and the real system layout is a compliance violation.
+
 
 <!-- BEGIN:nextjs-agent-rules -->
 
