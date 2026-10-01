@@ -2,6 +2,7 @@
   "name": "labish",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,7 +11,12 @@
     "generate-client": "openapi-ts"
   },
   "dependencies": {
+    "@payloadcms/db-postgres": "^3.90.2",
+    "@payloadcms/next": "^3.90.2",
+    "@payloadcms/richtext-lexical": "^3.90.2",
+    "graphql": "^16.14.2",
     "next": "16.3.6",
+    "payload": "^3.90.2",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
