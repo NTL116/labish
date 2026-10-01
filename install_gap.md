@@ -49,44 +49,46 @@ All seven items in the previous delta table (OpenAPI chicken-and-egg, DB provisi
 
 **Bottom line:** the single-command install pipeline now exists and works — one failed step (nginx) stands between the current state and the stated goal, plus a short list of correctness and hygiene fixes surfaced by this first real end-to-end run.
 
+> **Status update:** the checklist below has been implemented in `apps/api/app/setup.py`, `apps/web/package.json` and `.github/workflows/install-smoke.yml`, and validated on a clean `debian:12` container (nginx gateway answering on port 80, summary free of `FAIL`, DB password redacted). Remaining open items are operator actions on the affected host and two upstream-blocked dependency refreshes (noted inline).
+
 ---
 
 ## 7. Development checklist (updated from the `install_logs` run)
 
 ### A. Fix the nginx provisioning step (Blocker)
 
-- [ ] Reproduce and diagnose the `systemctl enable --now nginx` failure on a fresh Debian host; on failure, have `check_nginx` automatically capture and print `systemctl status nginx`, `journalctl -xeu nginx -n 50`, and `ss -ltnp 'sport = :80'` so the summary is actionable without a second SSH session.
-- [ ] Make nginx startup robust: fall back to `systemctl restart nginx` when `enable --now` fails (handles a wedged daemon left by the apt install), and verify the unit is `active` afterwards instead of assuming success.
-- [ ] Detect and report port-80 conflicts (another server, a lingering default-site worker) before attempting the start.
-- [ ] Re-run the one-liner on the affected host after the fix and confirm the summary reports `[OK ] nginx`.
+- [x] Reproduce and diagnose the `systemctl enable --now nginx` failure on a fresh Debian host; on failure, have `check_nginx` automatically capture and print `systemctl status nginx`, `journalctl -xeu nginx -n 50`, and `ss -ltnp 'sport = :80'` so the summary is actionable without a second SSH session.
+- [x] Make nginx startup robust: fall back to `systemctl restart nginx` when `enable --now` fails (handles a wedged daemon left by the apt install), and verify the unit is `active` afterwards instead of assuming success.
+- [x] Detect and report port-80 conflicts (another server, a lingering default-site worker) before attempting the start.
+- [ ] Re-run the one-liner on the affected host after the fix and confirm the summary reports `[OK  ] nginx`. *(Operator action; if it still fails, the summary now includes the captured diagnostics.)*
 
 ### B. Harden the post-install health check
 
-- [ ] Add a gateway probe through nginx (`http://127.0.0.1:80/` and `/api/health` or equivalent) so the health step validates the path users actually hit, not just the upstreams.
-- [ ] Add a Qdrant liveness probe (`http://127.0.0.1:6333/healthz` or `/readyz`) and a worker check (`systemctl is-active worker` at minimum).
-- [ ] Only print "the stack is up" when **every** started service — including nginx — passed; otherwise state exactly which entry points are degraded.
+- [x] Add a gateway probe through nginx (`http://127.0.0.1:80/` and `/api/health` or equivalent) so the health step validates the path users actually hit, not just the upstreams.
+- [x] Add a Qdrant liveness probe (`http://127.0.0.1:6333/healthz` or `/readyz`) and a worker check (`systemctl is-active worker` at minimum).
+- [x] Only print "the stack is up" when **every** started service — including nginx — passed; otherwise state exactly which entry points are degraded.
 
 ### C. Fix summary status reporting
 
-- [ ] Change `check_sap_ingestion` (and any other warn-and-continue step) to record a `SKIP`/`WARN` outcome with its reason instead of `OK` when the step did not actually complete, so the `--- Bootstrap summary ---` is trustworthy for re-run triage.
-- [ ] Ensure the process exit code and final message reflect the true aggregate state (it already returns 1 on failure — keep the human-readable output consistent with that).
+- [x] Change `check_sap_ingestion` (and any other warn-and-continue step) to record a `SKIP`/`WARN` outcome with its reason instead of `OK` when the step did not actually complete, so the `--- Bootstrap summary ---` is trustworthy for re-run triage.
+- [x] Ensure the process exit code and final message reflect the true aggregate state (it already returns 1 on failure — keep the human-readable output consistent with that).
 
 ### D. Align the Node toolchain with the dependency tree
 
-- [ ] Raise `NODE_MAJOR_MIN` in `setup.py` to match what `apps/web`'s dependency tree requires (>= 22.18 per the `EBADENGINE` warnings), so the installer upgrades Debian's Node 20 to the pinned NodeSource 22.x instead of accepting it.
-- [ ] Update the `engines` field in `apps/web/package.json` to the same floor, and keep `setup.py`/`AGENTS.md` in sync per the installer-sync rule.
+- [x] Raise `NODE_MAJOR_MIN` in `setup.py` to match what `apps/web`'s dependency tree requires (>= 22.18 per the `EBADENGINE` warnings), so the installer upgrades Debian's Node 20 to the pinned NodeSource 22.x instead of accepting it.
+- [x] Update the `engines` field in `apps/web/package.json` to the same floor, and keep `setup.py`/`AGENTS.md` in sync per the installer-sync rule.
 
 ### E. Secret hygiene
 
-- [ ] Redact secret-bearing arguments in `run()`'s command echo (mask the psql `PASSWORD '...'` literal and any future secret parameters) so generated credentials never land in install logs.
-- [ ] Rotate the PostgreSQL `labish` role password exposed in this captured log, and scrub/avoid committing logs containing live credentials.
+- [x] Redact secret-bearing arguments in `run()`'s command echo (mask the psql `PASSWORD '...'` literal and any future secret parameters) so generated credentials never land in install logs.
+- [ ] Rotate the PostgreSQL `labish` role password exposed in this captured log, and scrub/avoid committing logs containing live credentials. *(Operator action on the affected host: `sudo /opt/labish/install.sh --rotate-db-password` or `setup.py --yes --rotate-db-password` regenerates the credential, rewrites `/etc/labish/{api,web}.env` and restarts the services.)*
 
 ### F. Cleanup items
 
-- [ ] Pass `filter="data"` to the Qdrant `tar.extract(...)` call in `setup.py` to silence the Python 3.14 tarfile deprecation and harden the extraction.
-- [ ] Refresh `apps/web` dev dependencies: move off EOL `eslint@9.39.x` and the deprecated `@esbuild-kit/*` packages (superseded by `tsx`).
-- [ ] Make the `chown -R` of `/opt/labish` and `/var/lib/qdrant` conditional (skip when ownership is already correct) to keep re-runs fast.
+- [x] Pass `filter="data"` to the Qdrant `tar.extract(...)` call in `setup.py` to silence the Python 3.14 tarfile deprecation and harden the extraction.
+- [ ] Refresh `apps/web` dev dependencies: move off EOL `eslint@9.39.x` and the deprecated `@esbuild-kit/*` packages (superseded by `tsx`). *(Blocked upstream: `eslint@10` crashes `eslint-plugin-react` as bundled by `eslint-config-next@16.3.x`, and `@esbuild-kit/esm-loader` is a transitive dependency of `drizzle-kit` (via `@payloadcms/db-postgres`) up to the latest `0.31.11`. Revisit when those release fixes.)*
+- [x] Make the `chown -R` of `/opt/labish` and `/var/lib/qdrant` conditional (skip when ownership is already correct) to keep re-runs fast.
 
 ### G. Regression protection
 
-- [ ] Extend (or add) the clean-Debian CI install job to assert the nginx gateway answers on port 80 and that the bootstrap summary contains no `FAIL` lines, so this failure class is caught before release.
+- [x] Extend (or add) the clean-Debian CI install job to assert the nginx gateway answers on port 80 and that the bootstrap summary contains no `FAIL` lines, so this failure class is caught before release.
