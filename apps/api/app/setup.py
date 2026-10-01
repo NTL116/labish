@@ -6,22 +6,26 @@ COMPLIANCE BOUNDARY" rule in the root ``AGENTS.md``).
 
 Responsibilities:
 
-1. Python check   -- validate the active virtual environment and install
+1. System check   -- verify the core Debian host runtime binaries
+                     (``python3``, ``node``, ``npm``, PostgreSQL, Redis,
+                     nginx) and interactively offer to install any missing
+                     packages via ``apt``.
+2. Python check   -- validate the active virtual environment and install
                      backend dependencies via ``pip install -e '.[dev]'``
                      inside ``apps/api/``.
-2. Frontend check -- locate ``npm``, install the ``apps/web/`` package set,
+3. Frontend check -- locate ``npm``, install the ``apps/web/`` package set,
                      and run ``npm run generate-client`` so the OpenAPI
                      contract layer is compiled.
-3. Database check -- interactively offer to run ``alembic upgrade head``.
-4. Systemd check  -- on hosts with ``/etc/systemd/system``, offer to link
+4. Database check -- interactively offer to run ``alembic upgrade head``.
+5. Systemd check  -- on hosts with ``/etc/systemd/system``, offer to link
                      the ``deployment/systemd/*.service`` units, reload the
                      systemd daemon, and scaffold the ``/etc/labish/*.env``
                      environment files with secure permissions.
 
 Usage::
 
-    python apps/api/app/setup.py [--yes] [--skip-frontend] [--skip-db]
-                                 [--skip-systemd]
+    python apps/api/app/setup.py [--yes] [--skip-system] [--skip-frontend]
+                                 [--skip-db] [--skip-systemd]
 """
 
 from __future__ import annotations
@@ -52,6 +56,29 @@ ENV_FILE_TEMPLATE = """\
 # ...). Never commit secrets to the repository; this file is the only
 # place credentials should live.
 """
+
+# Core Debian host runtime requirements. Maps the binary probed on PATH to
+# the apt package that provides it. PostgreSQL and Redis also expose their
+# server daemons outside PATH on Debian, so secondary probe paths are
+# listed for them.
+SYSTEM_REQUIREMENTS: dict[str, dict[str, object]] = {
+    "python3": {"package": "python3", "extra_paths": ()},
+    "node": {"package": "nodejs", "extra_paths": ()},
+    "npm": {"package": "npm", "extra_paths": ()},
+    "postgresql": {
+        "package": "postgresql",
+        # The postgres server binary lives under /usr/lib/postgresql on
+        # Debian; psql on PATH also proves the stack is installed.
+        "extra_paths": ("psql", "postgres"),
+    },
+    "redis-server": {"package": "redis-server", "extra_paths": ()},
+    "nginx": {
+        "package": "nginx",
+        # nginx installs into /usr/sbin, which may be absent from a
+        # non-root operator's PATH.
+        "extra_paths": ("/usr/sbin/nginx",),
+    },
+}
 
 
 class BootstrapError(RuntimeError):
@@ -94,7 +121,98 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> 
 
 
 # ---------------------------------------------------------------------------
-# 1. Python / backend check
+# 1. System package check (apt)
+# ---------------------------------------------------------------------------
+
+def _binary_present(name: str, extra_paths: tuple[str, ...]) -> bool:
+    """Probe PATH for the binary, plus any alternate names/absolute paths."""
+    if shutil.which(name) is not None:
+        return True
+    for candidate in extra_paths:
+        if candidate.startswith("/"):
+            if Path(candidate).exists():
+                return True
+        elif shutil.which(candidate) is not None:
+            return True
+    return False
+
+
+def check_system_packages(*, assume_yes: bool) -> None:
+    info("--- System package check (apt) ---")
+    missing: list[tuple[str, str]] = []
+    for binary, spec in SYSTEM_REQUIREMENTS.items():
+        extra_paths: tuple[str, ...] = spec["extra_paths"]  # type: ignore[assignment]
+        package: str = spec["package"]  # type: ignore[assignment]
+        if _binary_present(binary, extra_paths):
+            info(f"Found host runtime: {binary}")
+        else:
+            warn(f"Missing host runtime: {binary} (apt package: {package})")
+            missing.append((binary, package))
+
+    if not missing:
+        info("All core host runtimes are present.")
+        return
+
+    missing_list = ", ".join(binary for binary, _ in missing)
+    apt_get = shutil.which("apt-get")
+    if apt_get is None:
+        warn(
+            "apt-get was not found; this does not look like a Debian host. "
+            "Install the missing runtimes with your platform's package "
+            f"manager, then re-run this script: {missing_list}"
+        )
+        return
+
+    if not confirm(
+        f"The following system dependencies are missing on this host: "
+        f"[{missing_list}]. Would you like this installer to invoke apt "
+        "to install them now?",
+        assume_yes=assume_yes,
+    ):
+        warn(
+            "Continuing without installing system packages; later steps "
+            f"may fail until these runtimes are present: {missing_list}"
+        )
+        return
+
+    packages = [package for _, package in missing]
+    if os.geteuid() == 0:
+        prefix: list[str] = []
+    else:
+        sudo = shutil.which("sudo")
+        if sudo is None:
+            warn(
+                "Root privileges are required to install system packages, "
+                "but neither root nor sudo is available. Re-run this "
+                "script as root or install sudo first."
+            )
+            raise BootstrapError(
+                "Insufficient privileges to install: " + missing_list
+            )
+        warn(
+            "Not running as root; apt will be invoked through sudo and "
+            "may prompt for your password."
+        )
+        prefix = [sudo]
+
+    run(prefix + [apt_get, "update"], cwd=REPO_ROOT)
+    run(prefix + [apt_get, "install", "-y", *packages], cwd=REPO_ROOT)
+
+    still_missing = [
+        binary
+        for binary, spec in SYSTEM_REQUIREMENTS.items()
+        if not _binary_present(binary, spec["extra_paths"])  # type: ignore[arg-type]
+    ]
+    if still_missing:
+        raise BootstrapError(
+            "System runtimes still missing after apt install: "
+            + ", ".join(still_missing)
+        )
+    info("All core host runtimes are now installed.")
+
+
+# ---------------------------------------------------------------------------
+# 2. Python / backend check
 # ---------------------------------------------------------------------------
 
 def check_python_backend() -> None:
@@ -118,7 +236,7 @@ def check_python_backend() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Frontend check
+# 3. Frontend check
 # ---------------------------------------------------------------------------
 
 def check_frontend() -> None:
@@ -142,7 +260,7 @@ def check_frontend() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Database check
+# 4. Database check
 # ---------------------------------------------------------------------------
 
 def check_database(*, assume_yes: bool) -> None:
@@ -158,7 +276,7 @@ def check_database(*, assume_yes: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Systemd check
+# 5. Systemd check
 # ---------------------------------------------------------------------------
 
 def _ensure_env_files() -> None:
@@ -233,6 +351,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Assume 'yes' for all interactive prompts.",
     )
     parser.add_argument(
+        "--skip-system", action="store_true",
+        help="Skip the host-level system package (apt) verification step.",
+    )
+    parser.add_argument(
         "--skip-frontend", action="store_true",
         help="Skip the npm install / generate-client step.",
     )
@@ -251,6 +373,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     info(f"Repository root: {REPO_ROOT}")
     try:
+        if args.skip_system:
+            info("Skipping system package check (--skip-system).")
+        else:
+            check_system_packages(assume_yes=args.yes)
         check_python_backend()
         if args.skip_frontend:
             info("Skipping frontend check (--skip-frontend).")
