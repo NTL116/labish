@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.core.middleware import register_middleware
-from app.routes import auth_router, system_router
+from app.routes import auth_router, settings_router, system_router
 
 app = FastAPI(
     title="Labish Services",
@@ -13,3 +13,4 @@ register_middleware(app)
 
 app.include_router(system_router)
 app.include_router(auth_router)
+app.include_router(settings_router)

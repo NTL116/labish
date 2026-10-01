@@ -22,6 +22,8 @@ dependencies = [
   "dramatiq[redis]>=1.17,<2",
   "redis>=5.2,<7",
   "email-validator>=2.2,<3",
+  # SAP Service Layer HTTP client (integrations/sap).
+  "httpx>=0.28,<1",
 ]
 
 [project.optional-dependencies]

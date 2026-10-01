@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { HealthCheckHealthGetData, HealthCheckHealthGetResponses, LoginAuthLoginPostData, LoginAuthLoginPostErrors, LoginAuthLoginPostResponses } from './types.gen';
+import type { HealthCheckHealthGetData, HealthCheckHealthGetResponses, LoginAuthLoginPostData, LoginAuthLoginPostErrors, LoginAuthLoginPostResponses, SapStatusSettingsSapStatusGetData, SapStatusSettingsSapStatusGetResponses, SaveSapConnectionSettingsSapSavePostData, SaveSapConnectionSettingsSapSavePostErrors, SaveSapConnectionSettingsSapSavePostResponses, TestSapConnectionSettingsSapTestPostData, TestSapConnectionSettingsSapTestPostErrors, TestSapConnectionSettingsSapTestPostResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -34,3 +34,38 @@ export const loginAuthLoginPost = <ThrowOnError extends boolean = false>(options
         ...options.headers
     }
 });
+
+/**
+ * Test Sap Connection
+ */
+export const testSapConnectionSettingsSapTestPost = <ThrowOnError extends boolean = false>(options: Options<TestSapConnectionSettingsSapTestPostData, ThrowOnError>): RequestResult<TestSapConnectionSettingsSapTestPostResponses, TestSapConnectionSettingsSapTestPostErrors, ThrowOnError> => (options.client ?? client).post<TestSapConnectionSettingsSapTestPostResponses, TestSapConnectionSettingsSapTestPostErrors, ThrowOnError>({
+    url: '/settings/sap/test',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Save Sap Connection
+ */
+export const saveSapConnectionSettingsSapSavePost = <ThrowOnError extends boolean = false>(options: Options<SaveSapConnectionSettingsSapSavePostData, ThrowOnError>): RequestResult<SaveSapConnectionSettingsSapSavePostResponses, SaveSapConnectionSettingsSapSavePostErrors, ThrowOnError> => (options.client ?? client).post<SaveSapConnectionSettingsSapSavePostResponses, SaveSapConnectionSettingsSapSavePostErrors, ThrowOnError>({
+    url: '/settings/sap/save',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Sap Status
+ *
+ * Report configuration and live SAP connectivity for the frontend.
+ *
+ * Never raises on SAP connection drops: every network/decryption
+ * failure degrades gracefully to ``is_connected = False`` so public
+ * pages keep rendering while the fallback banner takes over.
+ */
+export const sapStatusSettingsSapStatusGet = <ThrowOnError extends boolean = false>(options?: Options<SapStatusSettingsSapStatusGetData, ThrowOnError>): RequestResult<SapStatusSettingsSapStatusGetResponses, unknown, ThrowOnError> => (options?.client ?? client).get<SapStatusSettingsSapStatusGetResponses, unknown, ThrowOnError>({ url: '/settings/sap/status', ...options });
