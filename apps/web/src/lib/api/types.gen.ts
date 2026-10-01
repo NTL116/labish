@@ -29,6 +29,84 @@ export type LoginRequest = {
 };
 
 /**
+ * SAPConnectionRequest
+ */
+export type SapConnectionRequest = {
+    /**
+     * Service Layer Url
+     */
+    service_layer_url: string;
+    /**
+     * Company Db
+     */
+    company_db: string;
+    /**
+     * Username
+     */
+    username: string;
+    /**
+     * Password
+     */
+    password: string;
+    /**
+     * Fallback Phone Number
+     */
+    fallback_phone_number?: string | null;
+};
+
+/**
+ * SAPSaveResponse
+ */
+export type SapSaveResponse = {
+    /**
+     * Success
+     */
+    success: boolean;
+    /**
+     * Is Validated
+     */
+    is_validated: boolean;
+    /**
+     * Detail
+     */
+    detail: string;
+};
+
+/**
+ * SAPStatusResponse
+ *
+ * Lightweight system status consumed by frontend fallback banners.
+ */
+export type SapStatusResponse = {
+    /**
+     * Is Validated
+     */
+    is_validated: boolean;
+    /**
+     * Is Connected
+     */
+    is_connected: boolean;
+    /**
+     * Fallback Phone Number
+     */
+    fallback_phone_number?: string | null;
+};
+
+/**
+ * SAPTestResponse
+ */
+export type SapTestResponse = {
+    /**
+     * Success
+     */
+    success: boolean;
+    /**
+     * Detail
+     */
+    detail: string;
+};
+
+/**
  * TokenResponse
  */
 export type TokenResponse = {
@@ -114,3 +192,69 @@ export type LoginAuthLoginPostResponses = {
 };
 
 export type LoginAuthLoginPostResponse = LoginAuthLoginPostResponses[keyof LoginAuthLoginPostResponses];
+
+export type TestSapConnectionSettingsSapTestPostData = {
+    body: SapConnectionRequest;
+    path?: never;
+    query?: never;
+    url: '/settings/sap/test';
+};
+
+export type TestSapConnectionSettingsSapTestPostErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type TestSapConnectionSettingsSapTestPostError = TestSapConnectionSettingsSapTestPostErrors[keyof TestSapConnectionSettingsSapTestPostErrors];
+
+export type TestSapConnectionSettingsSapTestPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SapTestResponse;
+};
+
+export type TestSapConnectionSettingsSapTestPostResponse = TestSapConnectionSettingsSapTestPostResponses[keyof TestSapConnectionSettingsSapTestPostResponses];
+
+export type SaveSapConnectionSettingsSapSavePostData = {
+    body: SapConnectionRequest;
+    path?: never;
+    query?: never;
+    url: '/settings/sap/save';
+};
+
+export type SaveSapConnectionSettingsSapSavePostErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type SaveSapConnectionSettingsSapSavePostError = SaveSapConnectionSettingsSapSavePostErrors[keyof SaveSapConnectionSettingsSapSavePostErrors];
+
+export type SaveSapConnectionSettingsSapSavePostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SapSaveResponse;
+};
+
+export type SaveSapConnectionSettingsSapSavePostResponse = SaveSapConnectionSettingsSapSavePostResponses[keyof SaveSapConnectionSettingsSapSavePostResponses];
+
+export type SapStatusSettingsSapStatusGetData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/settings/sap/status';
+};
+
+export type SapStatusSettingsSapStatusGetResponses = {
+    /**
+     * Successful Response
+     */
+    200: SapStatusResponse;
+};
+
+export type SapStatusSettingsSapStatusGetResponse = SapStatusSettingsSapStatusGetResponses[keyof SapStatusSettingsSapStatusGetResponses];

@@ -319,3 +319,81 @@ async def test_authenticate_identity_business_partner_contact_match() -> None:
 
     assert identity.authenticated is True
     assert identity.role == "client"
+
+
+# -- /settings/sap/status ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sap_status_unconfigured(client: AsyncClient) -> None:
+    response = await client.get("/settings/sap/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "is_validated": False,
+        "is_connected": False,
+        "fallback_phone_number": None,
+    }
+
+
+@pytest.mark.asyncio
+@patch(f"{SAP_CLIENT}.login", new_callable=AsyncMock)
+async def test_sap_status_connected(
+    mock_login: AsyncMock,
+    client: AsyncClient,
+    validated_sap_config: SAPConfig,
+) -> None:
+    from app.integrations.sap.service_layer import SAPLoginResult
+
+    mock_login.return_value = SAPLoginResult(success=True, session_id="s1")
+
+    response = await client.get("/settings/sap/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_validated"] is True
+    assert body["is_connected"] is True
+
+
+@pytest.mark.asyncio
+@patch(f"{SAP_CLIENT}.login", new_callable=AsyncMock)
+async def test_sap_status_handles_connection_drop_gracefully(
+    mock_login: AsyncMock,
+    client: AsyncClient,
+    validated_sap_config: SAPConfig,
+) -> None:
+    mock_login.side_effect = Exception("connection reset by peer")
+
+    response = await client.get("/settings/sap/status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_validated"] is True
+    assert body["is_connected"] is False
+
+
+@pytest.mark.asyncio
+@patch(f"{SAP_CLIENT}.login", new_callable=AsyncMock)
+async def test_sap_save_persists_fallback_phone_number(
+    mock_login: AsyncMock, client: AsyncClient
+) -> None:
+    from app.integrations.sap.service_layer import SAPLoginResult
+
+    mock_login.return_value = SAPLoginResult(success=True, session_id="s1")
+
+    response = await client.post(
+        "/settings/sap/save",
+        json={**VALID_PAYLOAD, "fallback_phone_number": "+1 (555) 010-7000"},
+    )
+
+    assert response.status_code == 200
+
+    session_factory = get_sessionmaker()
+    async with session_factory() as session:
+        result = await session.execute(select(SAPConfig))
+        config = result.scalars().one()
+    assert config.fallback_phone_number == "+1 (555) 010-7000"
+
+    status = await client.get("/settings/sap/status")
+    assert status.json()["fallback_phone_number"] == "+1 (555) 010-7000"

@@ -20,3 +20,6 @@ class SAPConfig(SQLModel, table=True):
     username: str
     password: str  # encrypted at rest via core.security.encrypt_secret
     is_validated: bool = False
+    # Public service-center number surfaced by frontend fallback banners
+    # when SAP connectivity is degraded or configuration is incomplete.
+    fallback_phone_number: Optional[str] = None

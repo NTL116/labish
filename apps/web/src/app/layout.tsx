@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Lora } from "next/font/google";
+import SystemStatusBanner from "@/components/SystemStatusBanner";
 import "./globals.css";
 
 const inter = Inter({
@@ -21,7 +22,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${inter.variable} ${lora.variable} antialiased`}>
-      <body>{children}</body>
+      <body>
+        <SystemStatusBanner />
+        {children}
+      </body>
     </html>
   );
 }
