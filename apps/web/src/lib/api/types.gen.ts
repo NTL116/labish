@@ -55,6 +55,38 @@ export type SapConnectionRequest = {
 };
 
 /**
+ * SAPIngestResponse
+ *
+ * Summary of a completed metadata ingestion pass.
+ */
+export type SapIngestResponse = {
+    /**
+     * Success
+     */
+    success: boolean;
+    /**
+     * Entities
+     */
+    entities: number;
+    /**
+     * Complex Types
+     */
+    complex_types: number;
+    /**
+     * Dictionary Files
+     */
+    dictionary_files: number;
+    /**
+     * Typescript File
+     */
+    typescript_file: string | null;
+    /**
+     * Detail
+     */
+    detail: string;
+};
+
+/**
  * SAPSaveResponse
  */
 export type SapSaveResponse = {
@@ -258,3 +290,19 @@ export type SapStatusSettingsSapStatusGetResponses = {
 };
 
 export type SapStatusSettingsSapStatusGetResponse = SapStatusSettingsSapStatusGetResponses[keyof SapStatusSettingsSapStatusGetResponses];
+
+export type IngestSapSchemaSettingsSapIngestPostData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/settings/sap/ingest';
+};
+
+export type IngestSapSchemaSettingsSapIngestPostResponses = {
+    /**
+     * Successful Response
+     */
+    200: SapIngestResponse;
+};
+
+export type IngestSapSchemaSettingsSapIngestPostResponse = IngestSapSchemaSettingsSapIngestPostResponses[keyof IngestSapSchemaSettingsSapIngestPostResponses];
