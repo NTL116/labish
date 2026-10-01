@@ -12,7 +12,7 @@ from app.core.config import get_settings
 
 # Import all table models so they register on SQLModel.metadata
 # before autogeneration runs.
-from app.models import User  # noqa: F401
+from app.models import SAPConfig, User  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

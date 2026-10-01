@@ -5,6 +5,7 @@ direct SQL construction or external service calls.
 """
 
 from app.routes.auth import router as auth_router
+from app.routes.settings import router as settings_router
 from app.routes.system import router as system_router
 
-__all__ = ["auth_router", "system_router"]
+__all__ = ["auth_router", "settings_router", "system_router"]

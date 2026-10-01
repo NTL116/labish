@@ -6,6 +6,8 @@ or file paths); when neither is configured, an ephemeral pair is
 generated at startup for local development.
 """
 
+import base64
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import jwt
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from passlib.context import CryptContext
@@ -82,6 +85,7 @@ def get_key_pair() -> RSAKeyPair:
 def create_access_token(
     subject: str,
     expires_delta: timedelta | None = None,
+    extra_claims: dict | None = None,
 ) -> str:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -98,6 +102,8 @@ def create_access_token(
         "exp": expire,
         "jti": uuid.uuid4().hex,
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(
         payload, get_key_pair().private_key_pem, algorithm=JWT_ALGORITHM
     )
@@ -116,3 +122,27 @@ def decode_access_token(token: str) -> dict:
         issuer=settings.jwt_issuer,
         audience=settings.jwt_audience,
     )
+
+
+@lru_cache
+def _get_secret_cipher() -> Fernet:
+    """Symmetric cipher for encrypting stored integration credentials.
+
+    The Fernet key is derived from the RS256 private key so no extra
+    secret needs to be provisioned: stable whenever JWT key material is
+    configured, and ephemeral (matching JWT behaviour) in local dev.
+    """
+    digest = hashlib.sha256(
+        get_key_pair().private_key_pem.encode()
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def encrypt_secret(plaintext: str) -> str:
+    """Encrypt a credential for at-rest storage (e.g. SAPConfig.password)."""
+    return _get_secret_cipher().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_secret(ciphertext: str) -> str:
+    """Decrypt a credential previously produced by ``encrypt_secret``."""
+    return _get_secret_cipher().decrypt(ciphertext.encode()).decode()
