@@ -272,6 +272,7 @@ When updating schemas or modifying API layers, the AI must follow this defensive
 *   Never bake raw prompt strings directly into python execution files.
 *   All complex agent system instructions, structural system roles, and template context formats must reside in `app/shared/prompts/` as plain text or YAML targets. This ensures prompts can be version-controlled, tested, and fine-tuned independently of the backend logic.
 
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

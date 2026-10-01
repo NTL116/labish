@@ -1,0 +1,22 @@
+[Unit]
+Description=Labish Dramatiq Asynchronous Task Queue Worker
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=exec
+User=nathan
+Group=nathan
+WorkingDirectory=/home/nathan/my-application/apps/api
+EnvironmentFile=/etc/labish/api.env
+ExecStart=/home/nathan/my-application/apps/api/venv/bin/dramatiq app.tasks.main
+Restart=always
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
