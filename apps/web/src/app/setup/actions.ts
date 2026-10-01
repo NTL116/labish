@@ -1,11 +1,14 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import {
+  ingestSapSchemaSettingsSapIngestPost,
   saveSapConnectionSettingsSapSavePost,
   testSapConnectionSettingsSapTestPost,
 } from "@/lib/api";
-import { configureApiClient } from "@/lib/session";
+import { configureApiClient, SESSION_COOKIE } from "@/lib/session";
 
 type SAPConnectionForm = {
   service_layer_url: string;
@@ -75,4 +78,28 @@ export async function saveSapConnectionAction(
     redirect("/setup?status=save-failed");
   }
   redirect("/setup?status=saved");
+}
+
+export async function ingestSapSchemaAction(): Promise<void> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  if (!token) {
+    redirect("/setup?status=ingest-unauthorized");
+  }
+
+  configureApiClient();
+  const { data, error } = await ingestSapSchemaSettingsSapIngestPost({
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (error || !data?.success) {
+    redirect("/setup?status=ingest-failed");
+  }
+
+  // Trigger an immediate local type-validation refresh: the regenerated
+  // sap.d.ts / data dictionary invalidate the cached setup render.
+  revalidatePath("/setup");
+  redirect(
+    `/setup?status=ingest-ok&entities=${data.entities}&complex=${data.complex_types}`,
+  );
 }

@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { HealthCheckHealthGetData, HealthCheckHealthGetResponses, LoginAuthLoginPostData, LoginAuthLoginPostErrors, LoginAuthLoginPostResponses, SapStatusSettingsSapStatusGetData, SapStatusSettingsSapStatusGetResponses, SaveSapConnectionSettingsSapSavePostData, SaveSapConnectionSettingsSapSavePostErrors, SaveSapConnectionSettingsSapSavePostResponses, TestSapConnectionSettingsSapTestPostData, TestSapConnectionSettingsSapTestPostErrors, TestSapConnectionSettingsSapTestPostResponses } from './types.gen';
+import type { HealthCheckHealthGetData, HealthCheckHealthGetResponses, IngestSapSchemaSettingsSapIngestPostData, IngestSapSchemaSettingsSapIngestPostResponses, LoginAuthLoginPostData, LoginAuthLoginPostErrors, LoginAuthLoginPostResponses, SapStatusSettingsSapStatusGetData, SapStatusSettingsSapStatusGetResponses, SaveSapConnectionSettingsSapSavePostData, SaveSapConnectionSettingsSapSavePostErrors, SaveSapConnectionSettingsSapSavePostResponses, TestSapConnectionSettingsSapTestPostData, TestSapConnectionSettingsSapTestPostErrors, TestSapConnectionSettingsSapTestPostResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -69,3 +69,18 @@ export const saveSapConnectionSettingsSapSavePost = <ThrowOnError extends boolea
  * pages keep rendering while the fallback banner takes over.
  */
 export const sapStatusSettingsSapStatusGet = <ThrowOnError extends boolean = false>(options?: Options<SapStatusSettingsSapStatusGetData, ThrowOnError>): RequestResult<SapStatusSettingsSapStatusGetResponses, unknown, ThrowOnError> => (options?.client ?? client).get<SapStatusSettingsSapStatusGetResponses, unknown, ThrowOnError>({ url: '/settings/sap/status', ...options });
+
+/**
+ * Ingest Sap Schema
+ *
+ * Run the SAP metadata ingestion engine instantly (admin only).
+ *
+ * Pulls the raw OData ``$metadata`` document, regenerates the JSON
+ * data dictionary under ``app/shared/sap_dictionary/`` and recompiles
+ * the frontend ``apps/web/src/types/sap.d.ts`` definitions.
+ */
+export const ingestSapSchemaSettingsSapIngestPost = <ThrowOnError extends boolean = false>(options?: Options<IngestSapSchemaSettingsSapIngestPostData, ThrowOnError>): RequestResult<IngestSapSchemaSettingsSapIngestPostResponses, unknown, ThrowOnError> => (options?.client ?? client).post<IngestSapSchemaSettingsSapIngestPostResponses, unknown, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/settings/sap/ingest',
+    ...options
+});

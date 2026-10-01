@@ -6,5 +6,6 @@ register with the broker when the worker process starts.
 
 from app.tasks.broker import broker  # noqa: F401
 from app.tasks.email_dispatch import send_welcome_email_task  # noqa: F401
+from app.tasks.sap_sync import sync_sap_metadata_task  # noqa: F401
 
-__all__ = ["broker", "send_welcome_email_task"]
+__all__ = ["broker", "send_welcome_email_task", "sync_sap_metadata_task"]

@@ -1,7 +1,12 @@
 import Breadcrumb from "@/components/breadcrumb";
 import Footer from "@/components/footer";
 import SideRail from "@/components/side-rail";
-import { saveSapConnectionAction, testSapConnectionAction } from "./actions";
+import {
+  ingestSapSchemaAction,
+  saveSapConnectionAction,
+  testSapConnectionAction,
+} from "./actions";
+import SyncSchemaButton from "./sync-schema-button";
 
 const STATUS_MESSAGES: Record<string, { text: string; tone: "ok" | "error" }> = {
   "test-ok": {
@@ -22,6 +27,18 @@ const STATUS_MESSAGES: Record<string, { text: string; tone: "ok" | "error" }> = 
   },
   error: {
     text: "The submitted form was incomplete. Please fill in every field.",
+    tone: "error",
+  },
+  "ingest-ok": {
+    text: "SAP schema synced. Data dictionary and TypeScript definitions re-ingested; local type validation refreshed.",
+    tone: "ok",
+  },
+  "ingest-failed": {
+    text: "SAP schema ingestion failed. Verify the gateway configuration and connectivity, then retry.",
+    tone: "error",
+  },
+  "ingest-unauthorized": {
+    text: "An administrator session is required to re-ingest the SAP data dictionary. Please sign in first.",
     tone: "error",
   },
 };
@@ -127,6 +144,19 @@ export default async function SetupPage({
               </button>
             </div>
           </form>
+          <div className="max-w-sm space-y-4 border-t border-swiss-slate/20 pt-8">
+            <h2 className="font-serif text-xl font-light">
+              Schema & Data Dictionary
+            </h2>
+            <p className="font-sans text-sm text-swiss-slate">
+              Pull the latest SAP $metadata schema — including custom
+              User-Defined Fields — to rebuild the backend data
+              dictionary and regenerate the frontend type definitions.
+            </p>
+            <form action={ingestSapSchemaAction}>
+              <SyncSchemaButton />
+            </form>
+          </div>
         </div>
       </section>
 

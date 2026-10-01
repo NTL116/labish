@@ -17,7 +17,10 @@ Responsibilities:
                      and run ``npm run generate-client`` so the OpenAPI
                      contract layer is compiled.
 4. Database check -- interactively offer to run ``alembic upgrade head``.
-5. Systemd check  -- on hosts with ``/etc/systemd/system``, offer to link
+5. SAP ingestion   -- interactively offer to run the SAP metadata
+                     ingestion engine (``app/shared/ingest_sap_metadata``)
+                     to build the data dictionary and ``sap.d.ts``.
+6. Systemd check  -- on hosts with ``/etc/systemd/system``, offer to link
                      the ``deployment/systemd/*.service`` units, reload the
                      systemd daemon, and scaffold the ``/etc/labish/*.env``
                      environment files with secure permissions.
@@ -25,7 +28,8 @@ Responsibilities:
 Usage::
 
     python apps/api/app/setup.py [--yes] [--skip-system] [--skip-frontend]
-                                 [--skip-db] [--skip-systemd]
+                                 [--skip-db] [--skip-sap-ingest]
+                                 [--skip-systemd]
 """
 
 from __future__ import annotations
@@ -276,7 +280,47 @@ def check_database(*, assume_yes: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Systemd check
+# 5. SAP metadata ingestion check
+# ---------------------------------------------------------------------------
+
+def check_sap_ingestion(*, assume_yes: bool) -> None:
+    """Offer to run the SAP metadata ingestion engine.
+
+    Regenerates the JSON data dictionary (app/shared/sap_dictionary/)
+    and the frontend type definitions (apps/web/src/types/sap.d.ts)
+    from the live SAP $metadata document. Degrades gracefully when no
+    validated SAP configuration is saved yet.
+    """
+    info("--- SAP metadata ingestion check ---")
+    if not confirm(
+        "Ingest the SAP schema now (data dictionary + sap.d.ts "
+        "regeneration via app/shared/ingest_sap_metadata.py)?",
+        assume_yes=assume_yes,
+    ):
+        info(
+            "Skipping SAP metadata ingestion. Run it later via "
+            "POST /settings/sap/ingest or "
+            "'python -m app.shared.ingest_sap_metadata'."
+        )
+        return
+    result = subprocess.run(
+        [sys.executable, "-m", "app.shared.ingest_sap_metadata"],
+        cwd=API_DIR,
+    )
+    if result.returncode != 0:
+        # Fresh installs typically have no validated SAP gateway yet;
+        # ingestion is re-runnable, so never fail the bootstrap on it.
+        warn(
+            "SAP metadata ingestion did not complete (no validated SAP "
+            "configuration, or the Service Layer is unreachable). "
+            "Re-run it from the admin setup page once SAP is connected."
+        )
+        return
+    info("SAP data dictionary and TypeScript definitions regenerated.")
+
+
+# ---------------------------------------------------------------------------
+# 6. Systemd check
 # ---------------------------------------------------------------------------
 
 def _ensure_env_files() -> None:
@@ -363,6 +407,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip the alembic migration prompt.",
     )
     parser.add_argument(
+        "--skip-sap-ingest", action="store_true",
+        help="Skip the SAP metadata ingestion (data dictionary) prompt.",
+    )
+    parser.add_argument(
         "--skip-systemd", action="store_true",
         help="Skip systemd unit linking and environment file handling.",
     )
@@ -386,6 +434,10 @@ def main(argv: list[str] | None = None) -> int:
             info("Skipping database check (--skip-db).")
         else:
             check_database(assume_yes=args.yes)
+        if args.skip_sap_ingest:
+            info("Skipping SAP metadata ingestion check (--skip-sap-ingest).")
+        else:
+            check_sap_ingestion(assume_yes=args.yes)
         if args.skip_systemd:
             info("Skipping systemd check (--skip-systemd).")
         else:
