@@ -1,17 +1,21 @@
 import type { Metadata } from "next";
-import { Inter, Lora } from "next/font/google";
+import localFont from "next/font/local";
 import SystemStatusBanner from "@/components/SystemStatusBanner";
 import "./globals.css";
 
-const inter = Inter({
+// Fonts are vendored in src/fonts/ (SIL OFL, see OFL-*.txt) so production
+// builds never fetch from Google Fonts — required for offline installs.
+const inter = localFont({
+  src: "../fonts/Inter-Variable.ttf",
   variable: "--font-inter",
-  subsets: ["latin"],
 });
 
-const lora = Lora({
+const lora = localFont({
+  src: [
+    { path: "../fonts/Lora-Variable.ttf", style: "normal" },
+    { path: "../fonts/Lora-Italic-Variable.ttf", style: "italic" },
+  ],
   variable: "--font-lora",
-  subsets: ["latin"],
-  weight: ["400", "500"],
 });
 
 export const metadata: Metadata = {

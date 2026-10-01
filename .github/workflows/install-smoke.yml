@@ -1,0 +1,81 @@
+name: Install smoke test
+
+# Exercises the full single-command install path on a clean Debian
+# container (headless, --yes) and asserts the stack is actually usable,
+# preventing regressions in installability. systemd/nginx service
+# management is unavailable inside the container, so those steps are
+# skipped and the backend is health-checked directly.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - install.sh
+      - apps/api/**
+      - apps/web/package.json
+      - apps/web/package-lock.json
+      - deployment/**
+      - .github/workflows/install-smoke.yml
+  pull_request:
+    paths:
+      - install.sh
+      - apps/api/**
+      - apps/web/package.json
+      - apps/web/package-lock.json
+      - deployment/**
+      - .github/workflows/install-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:12
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the installer (non-interactive)
+        run: bash install.sh --skip-systemd --skip-nginx --skip-sap-ingest
+
+      - name: Assert provisioning artifacts
+        run: |
+          set -eux
+          test -x apps/api/venv/bin/python
+          test -x /usr/local/bin/qdrant
+          test -d apps/web/.next
+          test -d apps/web/src/lib/api
+          test -s /etc/labish/api.env
+          test -s /etc/labish/web.env
+          test -s /etc/labish/keys/jwt-private.pem
+          grep -q '^LABISH_DATABASE_URL=postgresql+asyncpg://labish:' /etc/labish/api.env
+          grep -q '^PAYLOAD_SECRET=' /etc/labish/web.env
+
+      - name: Assert database is migrated
+        working-directory: apps/api
+        run: |
+          set -eux
+          export $(grep -v '^#' /etc/labish/api.env | xargs)
+          venv/bin/python -m alembic current | grep -q "head"
+
+      - name: Boot the backend and health-check it
+        working-directory: apps/api
+        run: |
+          set -eux
+          apt-get install -y -qq curl
+          export $(grep -v '^#' /etc/labish/api.env | xargs)
+          venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health | grep -q '"ok"'; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend never became healthy" >&2
+          exit 1
+
+      - name: Re-run installer (idempotency)
+        run: bash install.sh --skip-systemd --skip-nginx --skip-sap-ingest

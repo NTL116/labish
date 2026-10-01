@@ -58,15 +58,30 @@ Do not use extensive third-party framework layers like `fastapi-users`. Build cu
 
 ## 3. Host System Installation Setup
 
+### Step 0: Single-Command Install (preferred)
+On a fresh Debian host, the entire stack is provisioned by the top-level
+`install.sh` wrapper, which clones the repository and hands off to the
+bootstrapper (`apps/api/app/setup.py --yes`):
+bash
+curl -fsSL https://raw.githubusercontent.com/NTL116/labish/main/install.sh | sudo bash
+
+The manual steps below describe what the bootstrapper automates.
+
 ### Step 1: Initialize Host Infrastructure Dependencies
 Execute the following native package configuration scripts directly on the host OS platform:
 bash
 sudo apt update
-sudo apt install -y postgresql postgresql-contrib redis-server nodejs npm python3-venv python3-pip nginx
+sudo apt install -y postgresql postgresql-contrib redis-server python3-venv python3-pip nginx openssl
 
-# Install Qdrant vector store locally via official script
-curl -L https://github.com | tar -xz
-sudo mv qdrant /usr/local/bin/
+# Node.js is pinned via NodeSource (Node 22.x) rather than Debian's nodejs/npm
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
+sudo apt install -y nodejs
+
+# Install the pinned Qdrant release binary (checksum-verified by setup.py)
+curl -fsSL -o qdrant.tar.gz \
+  https://github.com/qdrant/qdrant/releases/download/v1.13.4/qdrant-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf qdrant.tar.gz qdrant
+sudo install -m 0755 qdrant /usr/local/bin/qdrant
 
 
 ### Step 2: Establish Python Backend Context
@@ -76,22 +91,13 @@ cd apps/api
 python3 -m venv venv
 source venv/bin/activate
 
-cat << 'EOF' > requirements.txt
-fastapi
-uvicorn[standard]
-sqlmodel
-asyncpg
-alembic
-dramatiq[redis]
-redis
-pyjwt[crypto]
-passlib[bcrypt]
-langgraph
-qdrant-client
-EOF
-
+# Backend dependencies are declared in apps/api/pyproject.toml (the single
+# source of truth: fastapi, uvicorn[standard], sqlmodel, pyjwt[crypto],
+# passlib[bcrypt], asyncpg, alembic, pydantic-settings, dramatiq[redis],
+# redis, email-validator, httpx). langgraph and qdrant-client land with the
+# AI/vector phase and are added to pyproject.toml when that code ships.
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -e '.[dev]'
 
 
 ### Step 3: Configure Frontend Engine
@@ -107,14 +113,16 @@ npm install @hey-api/openapi-ts --save-dev
 
 ## 4. Production Service Deployment Specs
 
-### Qdrant Vector Daemon (`deployment/systemd/qdrant.service`)
+The files in `deployment/` are **templates** (`*.service.template`, `nginx.conf.template`). `apps/api/app/setup.py` renders them with the real install user, repository path, venv/node paths, and server name, then installs the rendered copies. The `${...}` placeholders below are substituted at install time — never hardcode a specific user or path.
+
+### Qdrant Vector Daemon (`deployment/systemd/qdrant.service.template`)
 ini
 [Unit]
 Description=Qdrant Local Vector Search Engine
 After=network.target
 
 [Service]
-User=nathan
+User=${LABISH_USER}
 ExecStart=/usr/local/bin/qdrant
 Restart=always
 
@@ -122,47 +130,47 @@ Restart=always
 WantedBy=multi-user.target
 
 
-### FastAPI Web Server (`deployment/systemd/fastapi.service`)
+### FastAPI Web Server (`deployment/systemd/fastapi.service.template`)
 ini
 [Unit]
 Description=FastAPI Main Application Process Gateway
 After=network.target postgresql.service redis.service qdrant.service
 
 [Service]
-User=nathan
-WorkingDirectory=/home/nathan/my-application/apps/api
-ExecStart=/home/nathan/my-application/apps/api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+User=${LABISH_USER}
+WorkingDirectory=${REPO_ROOT}/apps/api
+ExecStart=${VENV_BIN}/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 
 
-### Dramatiq Worker Daemon (`deployment/systemd/worker.service`)
+### Dramatiq Worker Daemon (`deployment/systemd/worker.service.template`)
 ini
 [Unit]
 Description=Dramatiq Asynchronous System Task Queue Worker
 After=network.target redis.service
 
 [Service]
-User=nathan
-WorkingDirectory=/home/nathan/my-application/apps/api
-ExecStart=/home/nathan/my-application/apps/api/venv/bin/dramatiq app.tasks.main
+User=${LABISH_USER}
+WorkingDirectory=${REPO_ROOT}/apps/api
+ExecStart=${VENV_BIN}/dramatiq app.tasks.main
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 
 
-### Next.js Production Engine (`deployment/systemd/nextjs.service`)
+### Next.js Production Engine (`deployment/systemd/nextjs.service.template`)
 ini
 [Unit]
 Description=Next.js Web Frontend Server Node Process
 After=network.target
 
 [Service]
-User=nathan
-WorkingDirectory=/home/nathan/my-application/apps/web
+User=${LABISH_USER}
+WorkingDirectory=${REPO_ROOT}/apps/web
 ExecStart=/usr/bin/npm run start
 Restart=always
 
@@ -170,11 +178,11 @@ Restart=always
 WantedBy=multi-user.target
 
 
-### NGINX Gateway Configuration (`deployment/nginx.conf`)
+### NGINX Gateway Configuration (`deployment/nginx.conf.template`)
 nginx
 server {
     listen 80;
-    server_name my-application.local;
+    server_name ${SERVER_NAME};
 
     location / {
         proxy_pass http://127.0.0.1:3000;

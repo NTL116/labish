@@ -1,6 +1,7 @@
-# Labish production reverse proxy.
-# Install as /etc/nginx/sites-available/labish and symlink into
-# sites-enabled, or include from the http {} block of nginx.conf.
+# Labish production reverse proxy (template).
+# Rendered by apps/api/app/setup.py with the real server_name and
+# installed as /etc/nginx/sites-available/labish (symlinked into
+# sites-enabled). ${SERVER_NAME} is substituted at install time.
 
 upstream labish_api {
     server 127.0.0.1:8000;
@@ -14,7 +15,7 @@ upstream labish_web {
 
 server {
     listen 80;
-    server_name my-application.local;
+    server_name ${SERVER_NAME};
 
     # Baseline hardening.
     server_tokens off;
